@@ -22,6 +22,13 @@ export const metadata: Metadata = {
     "Built for Sri Lankan salons. Bookings without phone calls, reminders that prevent no-shows, customer notes that never get lost.",
 };
 
+export const viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 5,
+  viewportFit: "cover" as const,
+};
+
 export default function RootLayout({
   children,
 }: {
