@@ -7,7 +7,7 @@ import { createClient } from '@supabase/supabase-js';
 
 let supabaseClient: ReturnType<typeof createClient> | null = null;
 
-export const getSupabaseClient = () => {
+const getSupabaseClient = () => {
   if (!supabaseClient) {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -21,3 +21,11 @@ export const getSupabaseClient = () => {
 
   return supabaseClient;
 };
+
+export const supabase = new Proxy({}, {
+  get: (target, prop) => {
+    return (getSupabaseClient() as any)[prop];
+  },
+}) as ReturnType<typeof createClient>;
+
+export { getSupabaseClient };
