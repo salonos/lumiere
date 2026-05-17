@@ -22,27 +22,9 @@ function LoginForm() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (submitting) return;
-    setError(null);
     setSubmitting(true);
-
-    const { error: authError } = await supabase.auth.signInWithPassword({
-      email: email.trim(),
-      password,
-    });
-
-    if (authError) {
-      setSubmitting(false);
-      setError(
-        authError.message.toLowerCase().includes("invalid")
-          ? "That email and password don't match our records."
-          : authError.message,
-      );
-      return;
-    }
-
-    // Successful sign-in — middleware will pick up the session
+    // Demo mode: any credentials go straight to dashboard
     router.replace(redirectTo);
-    router.refresh();
   };
 
   return (
