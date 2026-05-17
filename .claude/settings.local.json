@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(\\(Get-Content E:\\\\SalonOS\\\\app\\\\globals.css | Measure-Object -Line\\).Lines)",
+      "Bash(curl -s -o /dev/null -w \"/: %{http_code}\\\\n\" http://localhost:3000/)",
+      "Bash(curl -s -o /dev/null -w \"/login: %{http_code}\\\\n\" http://localhost:3000/login)",
+      "Bash(curl -s -o /dev/null -w \"/dashboard: %{http_code}\\\\n\" http://localhost:3000/dashboard)",
+      "Bash(curl -s -o /dev/null -w \"/customers/niluka-perera: %{http_code}\\\\n\" http://localhost:3000/customers/niluka-perera)",
+      "Bash(curl -s -o /dev/null -w \"/settings: %{http_code}\\\\n\" http://localhost:3000/settings)",
+      "Bash(powershell *)",
+      "Bash(npm run *)",
+      "Bash(curl -s http://localhost:3000)",
+      "Bash(ls \"D:\\\\SalonOS\\\\app\" && echo \"---\" && ls \"D:\\\\SalonOS\\\\components\" && echo \"---\" && ls \"D:\\\\SalonOS Mockup\")",
+      "Bash(npx tsc *)",
+      "Bash(npx next *)",
+      "Bash(Get-ChildItem -Path \"D:\\\\SalonOS\" -Recurse -Force)",
+      "Bash(Select-Object FullName)",
+      "Bash(curl *)",
+      "Bash(Select-Object -First 100)",
+      "Bash(Format-Table FullName, PSIsContainer)",
+      "Bash(Sort-Object FullName)",
+      "Bash(python -c ' *)",
+      "Bash(where python3 *)",
+      "Bash(where py *)",
+      "Bash(python3 -c ' *)",
+      "Bash(npm install *)",
+      "PowerShell(Get-ChildItem -Path \"D:\\\\SalonOS\" | Where-Object { $_.PSIsContainer } | Select-Object Name)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(Get-Content D:\\\\SalonOS\\\\.env.local)",
+      "Bash(Get-Content \"D:\\\\SalonOS\\\\app\\\\globals.css\")",
+      "Bash(Measure-Object -Line)",
+      "Bash(Select-Object -ExpandProperty Lines)",
+      "PowerShell(\\(Get-Content \"D:\\\\SalonOS\\\\app\\\\globals.css\"\\).Count)"
+    ]
+  }
+}

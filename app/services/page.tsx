@@ -1,0 +1,386 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import Sidebar from "@/components/Sidebar";
+import MobileTopBar from "@/components/MobileTopBar";
+import MobileTabBar from "@/components/MobileTabBar";
+import ServiceFormModal, {
+  type ServiceDraft,
+} from "@/components/ServiceFormModal";
+import ConfirmDialog from "@/components/ConfirmDialog";
+import Toast from "@/components/Toast";
+import {
+  CATEGORY_BLURB,
+  type Service,
+  type ServiceCategory,
+  lkr,
+} from "@/lib/data";
+import { supabase } from "@/lib/supabase";
+
+const CATEGORY_ORDER: ServiceCategory[] = [
+  "Hair",
+  "Skin",
+  "Nails",
+  "Threading",
+  "Bridal",
+  "Massage",
+  "Wax",
+];
+
+export default function ServicesPage() {
+  const [items, setItems] = useState<Service[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Modal state
+  const [formOpen, setFormOpen] = useState(false);
+  const [editing, setEditing] = useState<Service | undefined>(undefined);
+  const [confirmTarget, setConfirmTarget] = useState<Service | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+
+  // ── Load from Supabase on mount ────────────────────────────────────────
+
+  useEffect(() => {
+    supabase
+      .from("services")
+      .select("*")
+      .order("name")
+      .then(({ data, error }) => {
+        if (error) {
+          setToast("Couldn't load services — please refresh the page");
+        } else {
+          setItems(
+            (data ?? []).map((row) => ({
+              ...row,
+              description:     (row as Service).description      ?? "",
+              commission_rate: (row as Service).commission_rate  ?? null,
+              station_type_id: (row as Service).station_type_id  ?? null,
+            })) as Service[],
+          );
+        }
+        setLoading(false);
+      });
+  }, []);
+
+  const grouped = useMemo(() => {
+    const map = new Map<ServiceCategory, Service[]>();
+    CATEGORY_ORDER.forEach((c) => map.set(c, []));
+    for (const s of items) {
+      const list = map.get(s.category) ?? [];
+      list.push(s);
+      map.set(s.category, list);
+    }
+    return map;
+  }, [items]);
+
+  const totalEnabled = items.filter((s) => s.enabled).length;
+
+  /* ── Actions ──────────────────────────────────────── */
+
+  const toggle = async (id: number) => {
+    const svc = items.find((s) => s.id === id);
+    if (!svc) return;
+    const newEnabled = !svc.enabled;
+
+    // Optimistic update
+    setItems((prev) =>
+      prev.map((s) => (s.id === id ? { ...s, enabled: newEnabled } : s)),
+    );
+
+    const { error } = await supabase
+      .from("services")
+      .update({ enabled: newEnabled })
+      .eq("id", id);
+
+    if (error) {
+      // Revert on failure
+      setItems((prev) =>
+        prev.map((s) => (s.id === id ? { ...s, enabled: !newEnabled } : s)),
+      );
+      setToast("Couldn't update — please try again");
+    }
+  };
+
+  const openAdd = () => {
+    setEditing(undefined);
+    setFormOpen(true);
+  };
+
+  const openEdit = (svc: Service) => {
+    setEditing(svc);
+    setFormOpen(true);
+  };
+
+  const handleSave = async (draft: ServiceDraft, id?: number) => {
+    if (id !== undefined) {
+      // ── Edit existing ──
+      const { error } = await supabase
+        .from("services")
+        .update({
+          name:            draft.name,
+          category:        draft.category,
+          description:     draft.description,
+          duration:        draft.duration,
+          price:           draft.price,
+          commission_rate: draft.commission_rate === "" ? null : draft.commission_rate,
+          station_type_id: draft.station_type_id ?? null,
+          enabled:         draft.enabled,
+        })
+        .eq("id", id);
+
+      if (error) {
+        setToast("Couldn't save changes — please try again");
+      } else {
+        setItems((prev) =>
+          prev.map((s) =>
+            s.id === id
+              ? { ...s, ...draft, commission_rate: draft.commission_rate === "" ? null : draft.commission_rate }
+              : s,
+          ),
+        );
+        setToast(`"${draft.name}" updated`);
+      }
+    } else {
+      // ── Add new ──
+      const { data: created, error } = await supabase
+        .from("services")
+        .insert({
+          name:            draft.name,
+          category:        draft.category,
+          description:     draft.description,
+          duration:        draft.duration,
+          price:           draft.price,
+          commission_rate: draft.commission_rate === "" ? null : draft.commission_rate,
+          station_type_id: draft.station_type_id ?? null,
+          enabled:         draft.enabled,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        setToast("Couldn't add service — please try again");
+      } else if (created) {
+        setItems((prev) => [
+          ...prev,
+          { ...created, description: (created as Service).description ?? "" } as Service,
+        ]);
+        setToast(`"${draft.name}" added to your menu`);
+      }
+    }
+  };
+
+  const askRemove = (svc: Service) => setConfirmTarget(svc);
+
+  const confirmRemove = async () => {
+    if (!confirmTarget) return;
+    const removed = confirmTarget;
+
+    // Optimistic update
+    setItems((prev) => prev.filter((s) => s.id !== removed.id));
+
+    const { error } = await supabase
+      .from("services")
+      .delete()
+      .eq("id", removed.id);
+
+    if (error) {
+      // Revert
+      setItems((prev) => [...prev, removed]);
+      setToast("Couldn't remove — please try again");
+    } else {
+      setToast(`"${removed.name}" removed`);
+    }
+  };
+
+  /* ── Render ───────────────────────────────────────── */
+
+  return (
+    <div className="page-app page-services">
+      <Sidebar />
+      <MobileTopBar />
+
+      <main className="main">
+        <div className="page-header">
+          <div className="header-row">
+            <div>
+              <div className="eyebrow">What you offer</div>
+              <h1 className="page-title">Services</h1>
+              <p className="page-sub">
+                From a quiet trim to a full afternoon of care — the rituals
+                your salon is known for, priced and described in your own
+                words.
+              </p>
+            </div>
+            <div className="header-actions">
+              <button type="button" className="btn btn-primary" onClick={openAdd}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+                Add service
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {loading ? (
+          <div style={{ padding: "48px 0", textAlign: "center", color: "var(--ink-400)", fontSize: 14 }}>
+            Loading your services…
+          </div>
+        ) : (
+          <>
+            <div
+              style={{
+                fontSize: 12,
+                color: "var(--ink-500)",
+                letterSpacing: "0.04em",
+                marginBottom: 32,
+              }}
+            >
+              <strong style={{ color: "var(--ink-900)", fontWeight: 500 }}>
+                {totalEnabled}
+              </strong>{" "}
+              of {items.length} services live on your booking page
+            </div>
+
+            {items.length === 0 && (
+              <div style={{ padding: "48px 0", textAlign: "center", color: "var(--ink-400)", fontSize: 14 }}>
+                No services yet — add your first one above.
+              </div>
+            )}
+
+            {CATEGORY_ORDER.map((cat) => {
+              const list = grouped.get(cat) ?? [];
+              if (list.length === 0) return null;
+              const enabledCount = list.filter((s) => s.enabled).length;
+
+              return (
+                <section className="svc-category" key={cat}>
+                  <div className="svc-cat-head">
+                    <h2 className="svc-cat-title">
+                      {cat}
+                      <em>{CATEGORY_BLURB[cat]}</em>
+                    </h2>
+                    <div className="section-aside">
+                      {enabledCount} of {list.length} live
+                    </div>
+                  </div>
+
+                  <div className="svc-grid">
+                    {list.map((s) => (
+                      <div
+                        className={`svc-card ${s.enabled ? "" : "disabled"}`}
+                        key={s.id}
+                      >
+                        <div className="svc-card-head">
+                          <div>
+                            <div className="svc-duration">{s.duration} MIN</div>
+                            <div className="svc-name" style={{ marginTop: 4 }}>
+                              {s.name}
+                            </div>
+                          </div>
+                          <div style={{ textAlign: "right" }}>
+                            <div className="svc-price">{lkr(s.price)}</div>
+                            {s.commission_rate != null && (
+                              <div
+                                style={{
+                                  fontSize: 11,
+                                  color: "var(--ink-400)",
+                                  letterSpacing: "0.04em",
+                                  marginTop: 2,
+                                }}
+                              >
+                                {s.commission_rate}% commission
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <div className="svc-desc">
+                          {s.description || "No description added yet."}
+                        </div>
+                        <div className="svc-foot">
+                          <label
+                            className="svc-toggle-label"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <button
+                              type="button"
+                              className={`toggle ${s.enabled ? "on" : ""}`}
+                              aria-pressed={s.enabled}
+                              aria-label={s.enabled ? "Hide from booking page" : "Show on booking page"}
+                              onClick={() => toggle(s.id)}
+                            />
+                            {s.enabled ? "Live" : "Hidden"}
+                          </label>
+                          <div className="svc-actions">
+                            <button
+                              type="button"
+                              className="icon-btn"
+                              aria-label={`Edit ${s.name}`}
+                              onClick={() => openEdit(s)}
+                            >
+                              <svg viewBox="0 0 24 24">
+                                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                              </svg>
+                            </button>
+                            <button
+                              type="button"
+                              className="icon-btn"
+                              aria-label={`Remove ${s.name}`}
+                              onClick={() => askRemove(s)}
+                            >
+                              <svg viewBox="0 0 24 24">
+                                <polyline points="3 6 5 6 21 6" />
+                                <path d="M19 6l-1 14H6L5 6" />
+                                <path d="M10 11v6" />
+                                <path d="M14 11v6" />
+                                <path d="M9 6V4h6v2" />
+                              </svg>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              );
+            })}
+          </>
+        )}
+      </main>
+
+      <MobileTabBar active="more" />
+
+      {/* Add / Edit form */}
+      <ServiceFormModal
+        open={formOpen}
+        service={editing}
+        onClose={() => setFormOpen(false)}
+        onSave={handleSave}
+      />
+
+      {/* Destructive confirm */}
+      <ConfirmDialog
+        open={!!confirmTarget}
+        onClose={() => setConfirmTarget(null)}
+        onConfirm={confirmRemove}
+        eyebrow="Remove from menu"
+        title="Remove this service?"
+        body={
+          confirmTarget ? (
+            <>
+              You&rsquo;re about to remove <em>{confirmTarget.name}</em> from
+              your service menu. Customers won&rsquo;t be able to book it from
+              your page after this — though past appointments will keep their
+              records.
+            </>
+          ) : null
+        }
+        confirmLabel="Remove service"
+        cancelLabel="Keep it"
+      />
+
+      <Toast message={toast} onDone={() => setToast(null)} />
+    </div>
+  );
+}
