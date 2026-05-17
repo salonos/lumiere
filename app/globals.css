@@ -3043,10 +3043,45 @@
   .page-calendar .cal-event-svc { display: none; }
 }
 @media (max-width: 768px) {
-  .page-calendar .cal-toolbar { flex-direction: column; align-items: stretch; }
-  .page-calendar .cal-nav-label { font-size: 18px; min-width: 0; }
-  .page-calendar .cal-card { overflow-x: auto; }
+  .page-calendar .cal-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .page-calendar .cal-date-nav {
+    justify-content: space-between;
+    gap: 4px;
+  }
+  .page-calendar .cal-nav-label {
+    font-size: 18px;
+    min-width: 0;
+    flex: 1;
+    text-align: center;
+    padding: 0 8px;
+  }
+  .page-calendar .cal-nav-btn {
+    flex-shrink: 0;
+    min-width: 40px;
+    min-height: 40px;
+  }
+  .page-calendar .cal-card {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    border-radius: 14px;
+    margin-bottom: 24px;
+  }
   .page-calendar .cal-grid { min-width: 720px; }
+
+  /* Header actions: stack and fill on mobile */
+  .page-calendar .header-actions {
+    width: 100%;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .page-calendar .seg-toggle { width: 100%; justify-content: stretch; }
+  .page-calendar .seg-btn { flex: 1; text-align: center; min-height: 44px; }
+  .page-calendar .header-actions > .btn { width: 100%; justify-content: center; min-height: 44px; }
 }
 
 /* ── FullCalendar theme ────────────────────────────────────────────────────*/
@@ -3169,6 +3204,33 @@
   .page-calendar .fc .fc-col-header-cell-cushion { font-size: 10px; letter-spacing: 0.08em; }
   .page-calendar .fc-event-service { display: none; }
   .page-calendar .cal-card { overflow-x: auto; min-width: 0; }
+
+  /* Ensure FullCalendar has proper height on mobile */
+  .page-calendar .fc { min-height: 480px; }
+  .page-calendar .fc-view-harness { min-height: 480px !important; }
+  .page-calendar .fc-timegrid,
+  .page-calendar .fc-daygrid { min-width: 100%; }
+  .page-calendar .fc-timegrid-slot { height: 36px !important; }
+  .page-calendar .fc .fc-timegrid-slot-label-cushion { font-size: 10px; padding: 0 4px; }
+  .page-calendar .fc .fc-col-header-cell-cushion { padding: 6px 2px; }
+}
+
+/* =====================================================
+   STAFF DAY VIEW — responsive
+   Horizontal scroll for multi-staff columns on small screens
+   ===================================================== */
+.page-calendar .cal-card > div[style*="grid"] {
+  -webkit-overflow-scrolling: touch;
+}
+@media (max-width: 768px) {
+  /* The custom StaffDayView grid (rendered inline) gets horizontal scroll */
+  .page-calendar .cal-card {
+    overflow-x: auto !important;
+  }
+  /* Time column stays narrow, each staff column gets a min width */
+  .page-calendar .cal-card > div {
+    min-width: 100%;
+  }
 }
 
 /* =====================================================

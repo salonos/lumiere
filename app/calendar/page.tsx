@@ -492,6 +492,21 @@ export default function CalendarPage() {
   const [dayViewDate, setDayViewDate] = useState<string>(todayIso);
   const [staffCols,   setStaffCols]   = useState<StaffCol[]>([]);
 
+  // Auto-switch to Day view on mobile (Week/Month don't fit on phones)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia("(max-width: 768px)");
+    const apply = (matches: boolean) => {
+      if (matches) {
+        setView((current) => (current === "timeGridWeek" ? "timeGridDay" : current));
+      }
+    };
+    apply(mq.matches);
+    const handler = (e: MediaQueryListEvent) => apply(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+
   // Load staff columns
   useEffect(() => {
     supabase
