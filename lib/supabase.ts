@@ -3,11 +3,11 @@
 // so every query from a "use client" component runs as the logged-in user
 // and RLS policies scope data to that user's salon.
 
-import { createClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-let supabaseClient: ReturnType<typeof createClient> | null = null;
+let supabaseClient: SupabaseClient<any, any, any> | null = null;
 
-const getSupabaseClient = () => {
+const getSupabaseClient = (): SupabaseClient<any, any, any> => {
   if (!supabaseClient) {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -22,10 +22,12 @@ const getSupabaseClient = () => {
   return supabaseClient;
 };
 
-export const supabase = new Proxy({}, {
-  get: (target, prop) => {
-    return (getSupabaseClient() as any)[prop];
+export const supabase: SupabaseClient<any, any, any> = new Proxy({} as SupabaseClient<any, any, any>, {
+  get: (_target, prop) => {
+    const client = getSupabaseClient() as any;
+    const value = client[prop];
+    return typeof value === 'function' ? value.bind(client) : value;
   },
-}) as ReturnType<typeof createClient>;
+}) as SupabaseClient<any, any, any>;
 
 export { getSupabaseClient };
