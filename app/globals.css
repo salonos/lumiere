@@ -3201,35 +3201,41 @@
 .page-calendar .fc .fc-button { display: none; }
 
 @media (max-width: 768px) {
-  .page-calendar .fc .fc-col-header-cell-cushion { font-size: 10px; letter-spacing: 0.08em; }
+  .page-calendar .fc .fc-col-header-cell-cushion { font-size: 10px; letter-spacing: 0.08em; padding: 6px 2px; }
   .page-calendar .fc-event-service { display: none; }
-  .page-calendar .cal-card { overflow-x: auto; min-width: 0; }
 
-  /* Ensure FullCalendar has proper height on mobile */
-  .page-calendar .fc { min-height: 480px; }
-  .page-calendar .fc-view-harness { min-height: 480px !important; }
-  .page-calendar .fc-timegrid,
-  .page-calendar .fc-daygrid { min-width: 100%; }
-  .page-calendar .fc-timegrid-slot { height: 36px !important; }
+  /* Calendar card fills available space and scrolls horizontally for wide grids */
+  .page-calendar .cal-card {
+    overflow-x: auto !important;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    min-height: 640px;
+  }
+
+  /* FullCalendar must fill the card */
+  .page-calendar .fc {
+    height: 640px !important;
+    width: 100%;
+  }
+
+  /* Week view: 7 columns force horizontal scroll on narrow screens */
+  .page-calendar .fc .fc-timegrid,
+  .page-calendar .fc .fc-daygrid {
+    min-width: 640px;
+  }
+
+  /* Smaller slot label font on mobile */
   .page-calendar .fc .fc-timegrid-slot-label-cushion { font-size: 10px; padding: 0 4px; }
-  .page-calendar .fc .fc-col-header-cell-cushion { padding: 6px 2px; }
 }
 
 /* =====================================================
    STAFF DAY VIEW — responsive
-   Horizontal scroll for multi-staff columns on small screens
    ===================================================== */
-.page-calendar .cal-card > div[style*="grid"] {
-  -webkit-overflow-scrolling: touch;
-}
 @media (max-width: 768px) {
-  /* The custom StaffDayView grid (rendered inline) gets horizontal scroll */
+  /* The custom Day view's inner wrapper expands to fit content;
+     outer .cal-card scrolls horizontally if needed. */
   .page-calendar .cal-card {
     overflow-x: auto !important;
-  }
-  /* Time column stays narrow, each staff column gets a min width */
-  .page-calendar .cal-card > div {
-    min-width: 100%;
   }
 }
 
@@ -5027,12 +5033,13 @@ html, body {
   height: auto;
 }
 
-/* Make all tables horizontally scrollable on small screens */
-.page-app table {
+/* Make all tables horizontally scrollable on small screens
+   (FullCalendar uses tables internally — exclude its tables) */
+.page-app table:not(.fc *):not(.fc) {
   max-width: 100%;
 }
 @media (max-width: 768px) {
-  .page-app table {
+  .page-app table:not(.fc *):not(.fc) {
     display: block;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;

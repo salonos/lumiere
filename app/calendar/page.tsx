@@ -492,21 +492,6 @@ export default function CalendarPage() {
   const [dayViewDate, setDayViewDate] = useState<string>(todayIso);
   const [staffCols,   setStaffCols]   = useState<StaffCol[]>([]);
 
-  // Auto-switch to Day view on mobile (Week/Month don't fit on phones)
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const mq = window.matchMedia("(max-width: 768px)");
-    const apply = (matches: boolean) => {
-      if (matches) {
-        setView((current) => (current === "timeGridWeek" ? "timeGridDay" : current));
-      }
-    };
-    apply(mq.matches);
-    const handler = (e: MediaQueryListEvent) => apply(e.matches);
-    mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
-  }, []);
-
   // Load staff columns
   useEffect(() => {
     supabase
@@ -573,9 +558,22 @@ export default function CalendarPage() {
       } else {
         calRef.current?.getApi().changeView(v);
       }
+      // FullCalendar needs to recalc size after becoming visible
+      requestAnimationFrame(() => {
+        calRef.current?.getApi().updateSize();
+      });
     }
     setView(v);
   };
+
+  // Recalculate FullCalendar size whenever it becomes visible
+  useEffect(() => {
+    if (view === "timeGridDay") return;
+    const id = requestAnimationFrame(() => {
+      calRef.current?.getApi().updateSize();
+    });
+    return () => cancelAnimationFrame(id);
+  }, [view]);
 
   const goPrev = () => {
     if (view === "timeGridDay") {
@@ -851,7 +849,9 @@ export default function CalendarPage() {
             eventDrop={handleEventDrop}
             eventClick={handleEventClick}
             datesSet={handleDatesSet}
-            height="auto"
+            height={640}
+            contentHeight={580}
+            handleWindowResize
             slotMinTime="07:00:00"
             slotMaxTime="21:00:00"
             allDaySlot={false}
@@ -860,6 +860,9 @@ export default function CalendarPage() {
             slotLabelInterval="01:00:00"
             expandRows
             firstDay={1}
+            longPressDelay={400}
+            eventLongPressDelay={300}
+            selectLongPressDelay={300}
             eventContent={(info) => {
               const apt = info.event.extendedProps.apt as CalApt;
               return (
