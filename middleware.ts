@@ -40,16 +40,9 @@ export async function middleware(request: NextRequest) {
     PUBLIC_PATHS.has(path) ||
     PUBLIC_PREFIXES.some((p) => path.startsWith(p));
 
-  // Not signed in → bounce to /login (except for public pages)
-  if (!user && !isPublic) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/login";
-    url.searchParams.set("from", path);
-    return NextResponse.redirect(url);
-  }
-
-  // Already signed in → don't show the login page
-  if (user && path === "/login") {
+  // AUTH TEMPORARILY DISABLED FOR CLIENT REVIEW
+  // Redirect root to dashboard
+  if (path === "/") {
     const url = request.nextUrl.clone();
     url.pathname = "/dashboard";
     return NextResponse.redirect(url);
