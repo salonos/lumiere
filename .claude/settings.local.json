@@ -30,7 +30,8 @@
       "Bash(Get-Content \"D:\\\\SalonOS\\\\app\\\\globals.css\")",
       "Bash(Measure-Object -Line)",
       "Bash(Select-Object -ExpandProperty Lines)",
-      "PowerShell(\\(Get-Content \"D:\\\\SalonOS\\\\app\\\\globals.css\"\\).Count)"
+      "PowerShell(\\(Get-Content \"D:\\\\SalonOS\\\\app\\\\globals.css\"\\).Count)",
+      "Bash(Get-ChildItem -Path \"D:\\\\SalonOS\" -Recurse -Directory)"
     ]
   }
 }
