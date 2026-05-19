@@ -23,7 +23,23 @@ function LoginForm() {
     e.preventDefault();
     if (submitting) return;
     setSubmitting(true);
-    // Demo mode: any credentials go straight to dashboard
+    setError(null);
+
+    const { error: authError } = await supabase.auth.signInWithPassword({
+      email: email.trim(),
+      password,
+    });
+
+    if (authError) {
+      setSubmitting(false);
+      setError(
+        authError.message === "Invalid login credentials"
+          ? "That email and password don't match. Please try again."
+          : authError.message,
+      );
+      return;
+    }
+
     router.replace(redirectTo);
   };
 
