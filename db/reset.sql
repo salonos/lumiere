@@ -104,6 +104,11 @@ create policy "salons: own only"
   on public.salons for select
   using (id = public.current_salon_id());
 
+create policy "salons: update own"
+  on public.salons for update
+  using     (id = public.current_salon_id())
+  with check(id = public.current_salon_id());
+
 
 -- ── 5. STAFF ───────────────────────────────────────────────────────────────
 

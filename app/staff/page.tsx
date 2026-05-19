@@ -44,6 +44,8 @@ export default function StaffPage() {
   const [reassignMode,   setReassignMode]   = useState<"deactivate" | "delete" | null>(null);
   const [reassignTarget, setReassignTarget] = useState<StaffRow | null>(null);
   const [reassignDraft,  setReassignDraft]  = useState<{ draft: StaffDraft; id: number } | null>(null);
+  // aptId → staff IDs already booked at that appointment's date+time
+  const [reassignBusy,   setReassignBusy]   = useState<Record<number, number[]>>({});
 
   // ── Load ──────────────────────────────────────────────────────────────────
 
@@ -122,6 +124,26 @@ export default function StaffPage() {
     return (data ?? []) as unknown as UpcomingApt[];
   };
 
+  // For each appointment in `appts`, find which other staff are already
+  // booked at the same date+time so they can be excluded from the reassign dropdown.
+  const fetchBusyStaff = async (appts: UpcomingApt[]): Promise<Record<number, number[]>> => {
+    const dates = [...new Set(appts.map((a) => a.date))];
+    const { data } = await supabase
+      .from("appointments")
+      .select("id, staff_id, date, time")
+      .in("date", dates)
+      .neq("status", "cancelled")
+      .not("staff_id", "is", null);
+    const rows = (data ?? []) as { staff_id: number; date: string; time: string }[];
+    const result: Record<number, number[]> = {};
+    for (const apt of appts) {
+      result[apt.id] = rows
+        .filter((r) => r.date === apt.date && r.time.slice(0, 5) === apt.time.slice(0, 5))
+        .map((r) => r.staff_id);
+    }
+    return result;
+  };
+
   const openAddStaff = () => {
     setEditingStaff(undefined);
     setStaffFormOpen(true);
@@ -146,7 +168,9 @@ export default function StaffPage() {
       if (!skipCheck && editingStaff?.active && !draft.active) {
         const appts = await checkUpcomingAppts(id);
         if (appts.length > 0) {
+          const busy = await fetchBusyStaff(appts);
           setReassignAppts(appts);
+          setReassignBusy(busy);
           setReassignMode("deactivate");
           setReassignTarget(editingStaff);
           setReassignDraft({ draft, id });
@@ -215,7 +239,9 @@ export default function StaffPage() {
   const handleDeleteClick = async (s: StaffRow) => {
     const appts = await checkUpcomingAppts(s.id);
     if (appts.length > 0) {
+      const busy = await fetchBusyStaff(appts);
       setReassignAppts(appts);
+      setReassignBusy(busy);
       setReassignMode("delete");
       setReassignTarget(s);
       setReassignDraft(null);
@@ -239,6 +265,7 @@ export default function StaffPage() {
     setReassignMode(null);
     setReassignTarget(null);
     setReassignDraft(null);
+    setReassignBusy({});
 
     if (mode === "deactivate" && saved) {
       await handleSaveStaff(saved.draft, saved.id, true);
@@ -632,12 +659,14 @@ export default function StaffPage() {
         otherStaff={staff
           .filter((s) => s.active && s.id !== reassignTarget?.id)
           .map((s) => ({ id: s.id, name: s.name }))}
+        busyStaff={reassignBusy}
         onConfirm={proceedAfterReassign}
         onCancel={() => {
           setReassignAppts([]);
           setReassignMode(null);
           setReassignTarget(null);
           setReassignDraft(null);
+          setReassignBusy({});
         }}
       />
 

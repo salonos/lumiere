@@ -17,6 +17,7 @@ type Props = {
   staffName:   string;
   appointments: UpcomingApt[];
   otherStaff:  { id: number; name: string }[];
+  busyStaff?:  Record<number, number[]>; // aptId → staff IDs already booked at that time
   onConfirm:   (reassignments: Record<number, number | null>) => void;
   onCancel:    () => void;
 };
@@ -34,7 +35,7 @@ function fmtTime(t: string) {
 }
 
 export default function StaffReassignModal({
-  open, mode, staffName, appointments, otherStaff, onConfirm, onCancel,
+  open, mode, staffName, appointments, otherStaff, busyStaff, onConfirm, onCancel,
 }: Props) {
   const isDelete = mode === "delete";
   const verb     = isDelete ? "Remove" : "Deactivate";
@@ -124,25 +125,41 @@ export default function StaffReassignModal({
             </div>
 
             {/* Reassign dropdown */}
-            <select
-              value={map[apt.id] === undefined ? "" : (map[apt.id] === null ? "null" : String(map[apt.id]))}
-              onChange={(e) => set(apt.id, e.target.value === "null" ? null : Number(e.target.value))}
-              style={{
-                fontSize: 12,
-                padding: "5px 8px",
-                border: "1px solid var(--ink-200)",
-                borderRadius: 7,
-                background: "var(--white)",
-                color: "var(--ink-700)",
-                cursor: "pointer",
-              }}
-            >
-              <option value="" disabled>Choose…</option>
-              <option value="null">Owner (unassigned)</option>
-              {otherStaff.map((s) => (
-                <option key={s.id} value={String(s.id)}>{s.name}</option>
-              ))}
-            </select>
+            {(() => {
+              const busyIds = busyStaff?.[apt.id] ?? [];
+              const available = otherStaff.filter((s) => !busyIds.includes(s.id));
+              const busyOnes  = otherStaff.filter((s) =>  busyIds.includes(s.id));
+              return (
+                <select
+                  value={map[apt.id] === undefined ? "" : (map[apt.id] === null ? "null" : String(map[apt.id]))}
+                  onChange={(e) => set(apt.id, e.target.value === "null" ? null : Number(e.target.value))}
+                  style={{
+                    fontSize: 12,
+                    padding: "5px 8px",
+                    border: "1px solid var(--ink-200)",
+                    borderRadius: 7,
+                    background: "var(--white)",
+                    color: "var(--ink-700)",
+                    cursor: "pointer",
+                  }}
+                >
+                  <option value="" disabled>Choose…</option>
+                  <option value="null">Owner (unassigned)</option>
+                  {available.map((s) => (
+                    <option key={s.id} value={String(s.id)}>{s.name}</option>
+                  ))}
+                  {busyOnes.length > 0 && (
+                    <optgroup label="Already booked at this time">
+                      {busyOnes.map((s) => (
+                        <option key={s.id} value={String(s.id)} disabled>
+                          {s.name} — busy
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+              );
+            })()}
           </div>
         ))}
       </div>

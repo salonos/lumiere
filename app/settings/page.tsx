@@ -181,10 +181,14 @@ export default function SettingsPage() {
     (JSON.stringify(reminders) !== JSON.stringify(savedReminders) ? 1 : 0);
 
   const save = async () => {
-    if (saving || !salonId) return;
+    if (saving) return;
+    if (!salonId) {
+      setToast("Couldn't determine your salon — please refresh");
+      return;
+    }
     setSaving(true);
 
-    const { error } = await supabase
+    const { data: updated, error } = await supabase
       .from("salons")
       .update({
         name:          salon.name,
@@ -196,11 +200,12 @@ export default function SettingsPage() {
         booking_slug:  salon.bookingSlug || null,
         opening_hours: hours,
       })
-      .eq("id", salonId);
+      .eq("id", salonId)
+      .select("id");
 
     setSaving(false);
 
-    if (error) {
+    if (error || !updated || updated.length === 0) {
       setToast("Couldn't save — please try again");
       return;
     }
