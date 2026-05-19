@@ -116,60 +116,54 @@ export default function SettingsPage() {
     let cancelled = false;
     (async () => {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        setLoading(false);
-        return;
-      }
+      if (!user) { setLoading(false); return; }
       if (!cancelled) setAccountEmail(user.email ?? "");
 
-      const { data: link } = await supabase
+      // Step 1 — simple query, no join, guaranteed to work if salon_users row exists
+      const { data: linkRow } = await supabase
         .from("salon_users")
-        .select("full_name, salon_id, salons(id, name, tagline, phone, whatsapp, address, city, booking_slug, opening_hours)")
+        .select("full_name, salon_id")
         .eq("user_id", user.id)
         .single();
 
-      if (cancelled || !link) {
-        setLoading(false);
-        return;
-      }
+      if (cancelled || !linkRow) { setLoading(false); return; }
 
-      // Supabase typings represent the joined row as an array of one even though it's a single FK.
-      // Cast through unknown so we can read the fields regardless of shape.
-      const raw = link as unknown as {
-        full_name?: string;
-        salon_id?: string;
-        salons?:
-          | Record<string, unknown>
-          | Record<string, unknown>[]
-          | null;
-      };
-      const fullName = raw.full_name ?? "";
-      const s = Array.isArray(raw.salons) ? raw.salons[0] : raw.salons;
-
+      const sid      = (linkRow as { salon_id?: string }).salon_id ?? null;
+      const fullName = (linkRow as { full_name?: string }).full_name ?? "";
       setOwnerName(fullName);
-      setSalonId(raw.salon_id ?? null);
+      setSalonId(sid);
 
-      if (s) {
+      if (!sid) { setLoading(false); return; }
+
+      // Step 2 — fetch salon profile separately
+      const { data: s } = await supabase
+        .from("salons")
+        .select("name, tagline, phone, whatsapp, address, city, booking_slug, opening_hours")
+        .eq("id", sid)
+        .single();
+
+      if (!cancelled && s) {
+        const r = s as Record<string, unknown>;
         const profile: SalonProfile = {
-          name:        (s.name        as string) ?? "",
-          tagline:     (s.tagline     as string) ?? "",
-          phone:       (s.phone       as string) ?? "",
-          whatsapp:    (s.whatsapp    as string) ?? "",
-          address:     (s.address     as string) ?? "",
-          city:        (s.city        as string) ?? "",
-          bookingSlug: (s.booking_slug as string) ?? "",
+          name:        (r.name        as string) ?? "",
+          tagline:     (r.tagline     as string) ?? "",
+          phone:       (r.phone       as string) ?? "",
+          whatsapp:    (r.whatsapp    as string) ?? "",
+          address:     (r.address     as string) ?? "",
+          city:        (r.city        as string) ?? "",
+          bookingSlug: (r.booking_slug as string) ?? "",
         };
         setSalon(profile);
         setSavedSalon(profile);
 
-        const oh = s.opening_hours as Record<string, unknown> | null;
+        const oh = r.opening_hours as Record<string, unknown> | null;
         if (oh && Object.keys(oh).length > 0) {
           const loaded = oh as Record<DayKey, Hours>;
           setHours(loaded);
           setSavedHours(loaded);
         }
       }
-      setLoading(false);
+      if (!cancelled) setLoading(false);
     })();
     return () => { cancelled = true; };
   }, []);
