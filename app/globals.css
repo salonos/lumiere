@@ -1100,7 +1100,7 @@
 /* =====================================================
    PAGE: APP SHELL (Dashboard, Customer, Settings shared)
    ===================================================== */
-.page-app { min-height: 100vh; display: flex; }
+.page-app { height: 100vh; display: flex; overflow: hidden; }
 
 .page-app .sidebar {
   width: 240px;
@@ -1180,6 +1180,8 @@
   min-width: 0;
   padding: 56px 64px 80px;
   max-width: 1280px;
+  overflow-y: auto;
+  height: 100vh;
 }
 
 .page-app .btn {
