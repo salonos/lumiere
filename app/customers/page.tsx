@@ -122,6 +122,18 @@ export default function CustomersListPage() {
                 Every face, every preference, every quiet detail — kept in one
                 place, never lost.
               </p>
+
+              {/* Avatar colour legend */}
+              <div style={{ display: "flex", gap: 16, marginTop: 10, flexWrap: "wrap" }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--ink-500)" }}>
+                  <span style={{ width: 12, height: 12, borderRadius: "50%", background: "linear-gradient(135deg, var(--plum-700), var(--plum-500))", flexShrink: 0 }} />
+                  Dark avatar — loyal customer (8+ visits)
+                </span>
+                <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--ink-500)" }}>
+                  <span style={{ width: 12, height: 12, borderRadius: "50%", background: "var(--plum-50)", border: "1px solid var(--plum-200, #d4b8c7)", flexShrink: 0 }} />
+                  Light avatar — newer or growing customer
+                </span>
+              </div>
             </div>
             <div className="header-actions">
               <button
