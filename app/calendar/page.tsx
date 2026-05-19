@@ -492,8 +492,8 @@ export default function CalendarPage() {
   const [dayViewDate, setDayViewDate] = useState<string>(todayIso);
   const [staffCols,   setStaffCols]   = useState<StaffCol[]>([]);
 
-  // Load staff columns
-  useEffect(() => {
+  // Load staff columns (+ keep them in sync via Realtime)
+  const fetchStaffCols = useCallback(() => {
     supabase
       .from("staff")
       .select("id, name")
@@ -504,6 +504,21 @@ export default function CalendarPage() {
         setStaffCols([{ id: null, name: "Owner" }, ...rows]);
       });
   }, []);
+
+  useEffect(() => {
+    fetchStaffCols();
+
+    const channel = supabase
+      .channel("staff-changes")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "staff" },
+        () => fetchStaffCols(),
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [fetchStaffCols]);
 
   // ── Fetch appointments ─────────────────────────────────────────────────────
 

@@ -116,18 +116,19 @@ export default function StaffPage() {
         setToast(`${draft.name} updated`);
       }
     } else {
-      const { data: created, error } = await supabase
+      const { data: rows, error } = await supabase
         .from("staff")
         .insert(payload)
-        .select()
-        .single();
+        .select();
       if (error) {
+        console.error("[staff insert]", error);
         setToast("Couldn't add staff member — please try again");
-      } else if (created) {
+      } else {
+        const created = (rows ?? [])[0] as { id: number } | undefined;
         setStaff((prev) => [
           ...prev,
           {
-            id: (created as { id: number }).id,
+            id: created?.id ?? Date.now(),
             name: draft.name,
             role: draft.role,
             dob: draft.dob,
