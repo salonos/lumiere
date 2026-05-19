@@ -124,7 +124,7 @@ export default function SettingsPage() {
 
       const { data: link } = await supabase
         .from("salon_users")
-        .select("full_name, salon_id, salons(id, name, tagline, phone, whatsapp, address, city, booking_slug)")
+        .select("full_name, salon_id, salons(id, name, tagline, phone, whatsapp, address, city, booking_slug, opening_hours)")
         .eq("user_id", user.id)
         .single();
 
@@ -161,6 +161,13 @@ export default function SettingsPage() {
         };
         setSalon(profile);
         setSavedSalon(profile);
+
+        const oh = s.opening_hours as Record<string, unknown> | null;
+        if (oh && Object.keys(oh).length > 0) {
+          const loaded = oh as Record<DayKey, Hours>;
+          setHours(loaded);
+          setSavedHours(loaded);
+        }
       }
       setLoading(false);
     })();
@@ -180,13 +187,14 @@ export default function SettingsPage() {
     const { error } = await supabase
       .from("salons")
       .update({
-        name:         salon.name,
-        tagline:      salon.tagline || null,
-        phone:        salon.phone || null,
-        whatsapp:     salon.whatsapp || null,
-        address:      salon.address || null,
-        city:         salon.city || null,
-        booking_slug: salon.bookingSlug || null,
+        name:          salon.name,
+        tagline:       salon.tagline || null,
+        phone:         salon.phone || null,
+        whatsapp:      salon.whatsapp || null,
+        address:       salon.address || null,
+        city:          salon.city || null,
+        booking_slug:  salon.bookingSlug || null,
+        opening_hours: hours,
       })
       .eq("id", salonId);
 
@@ -197,8 +205,6 @@ export default function SettingsPage() {
       return;
     }
 
-    // Opening hours and reminder toggles live in local state only for now
-    // (no columns on `salons` for them yet — that's a Phase 4 follow-up).
     setSavedSalon(salon);
     setSavedHours(hours);
     setSavedReminders(reminders);

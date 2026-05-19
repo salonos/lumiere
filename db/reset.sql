@@ -47,15 +47,16 @@ create extension if not exists pgcrypto;
 -- ── 2. SALONS ──────────────────────────────────────────────────────────────
 
 create table public.salons (
-  id            uuid         primary key default gen_random_uuid(),
-  name          text         not null,
-  city          text,
-  tagline       text,
-  address       text,
-  phone         text,
-  whatsapp      text,
-  booking_slug  text         not null unique,
-  created_at    timestamptz  not null default now()
+  id             uuid         primary key default gen_random_uuid(),
+  name           text         not null,
+  city           text,
+  tagline        text,
+  address        text,
+  phone          text,
+  whatsapp       text,
+  booking_slug   text         not null unique,
+  opening_hours  jsonb        not null default '{}',
+  created_at     timestamptz  not null default now()
 );
 
 alter table public.salons enable row level security;
@@ -261,9 +262,16 @@ begin
   end if;
 
   /* ── Create the salon ── */
-  insert into public.salons (name, city, tagline, address, phone, whatsapp, booking_slug)
+  insert into public.salons (name, city, tagline, address, phone, whatsapp, booking_slug, opening_hours)
   values ('Test Salon', 'Colombo', 'A quieter way to run your salon.',
-          '93 Galle Road, Colombo 03', '+94 77 123 4567', '+94 77 123 4567', 'test-salon')
+          '93 Galle Road, Colombo 03', '+94 77 123 4567', '+94 77 123 4567', 'test-salon',
+          '{"monday":{"on":true,"open":"09:00","close":"19:00"},
+            "tuesday":{"on":true,"open":"09:00","close":"19:00"},
+            "wednesday":{"on":true,"open":"09:00","close":"19:00"},
+            "thursday":{"on":true,"open":"09:00","close":"19:00"},
+            "friday":{"on":true,"open":"09:00","close":"20:00"},
+            "saturday":{"on":true,"open":"09:00","close":"20:00"},
+            "sunday":{"on":false,"open":"","close":""}}'::jsonb)
   returning id into v_sid;
 
   /* ── Link the auth user as owner ── */

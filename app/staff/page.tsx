@@ -12,6 +12,7 @@ import StationTypeFormModal, {
   type StationTypeDraft,
   type StationTypeRow,
 } from "@/components/StationTypeFormModal";
+import StaffReassignModal, { type UpcomingApt } from "@/components/StaffReassignModal";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import Toast from "@/components/Toast";
 import { lkr } from "@/lib/data";
@@ -37,6 +38,12 @@ export default function StaffPage() {
   const [confirmStation, setConfirmStation] = useState<StationTypeRow | null>(null);
 
   const [toast, setToast] = useState<string | null>(null);
+
+  // Reassign-before-deactivate/delete state
+  const [reassignAppts,  setReassignAppts]  = useState<UpcomingApt[]>([]);
+  const [reassignMode,   setReassignMode]   = useState<"deactivate" | "delete" | null>(null);
+  const [reassignTarget, setReassignTarget] = useState<StaffRow | null>(null);
+  const [reassignDraft,  setReassignDraft]  = useState<{ draft: StaffDraft; id: number } | null>(null);
 
   // ── Load ──────────────────────────────────────────────────────────────────
 
@@ -102,6 +109,19 @@ export default function StaffPage() {
 
   // ── Staff actions ─────────────────────────────────────────────────────────
 
+  const checkUpcomingAppts = async (staffId: number): Promise<UpcomingApt[]> => {
+    const today = new Date().toLocaleDateString("en-CA");
+    const { data } = await supabase
+      .from("appointments")
+      .select("id, date, time, customers(name), services(name)")
+      .eq("staff_id", staffId)
+      .gte("date", today)
+      .neq("status", "cancelled")
+      .order("date")
+      .order("time");
+    return (data ?? []) as unknown as UpcomingApt[];
+  };
+
   const openAddStaff = () => {
     setEditingStaff(undefined);
     setStaffFormOpen(true);
@@ -112,7 +132,7 @@ export default function StaffPage() {
     setStaffFormOpen(true);
   };
 
-  const handleSaveStaff = async (draft: StaffDraft, id?: number) => {
+  const handleSaveStaff = async (draft: StaffDraft, id?: number, skipCheck = false) => {
     const basePayload = {
       name: draft.name,
       role: draft.role || null,
@@ -122,6 +142,18 @@ export default function StaffPage() {
     };
 
     if (id !== undefined) {
+      // Intercept deactivation: check for upcoming appointments first
+      if (!skipCheck && editingStaff?.active && !draft.active) {
+        const appts = await checkUpcomingAppts(id);
+        if (appts.length > 0) {
+          setReassignAppts(appts);
+          setReassignMode("deactivate");
+          setReassignTarget(editingStaff);
+          setReassignDraft({ draft, id });
+          return;
+        }
+      }
+
       const { error } = await supabase.from("staff").update(basePayload).eq("id", id);
       if (error) {
         console.error("[staff update]", error);
@@ -176,6 +208,48 @@ export default function StaffPage() {
           },
         ]);
         setToast(`${draft.name} added to your team`);
+      }
+    }
+  };
+
+  const handleDeleteClick = async (s: StaffRow) => {
+    const appts = await checkUpcomingAppts(s.id);
+    if (appts.length > 0) {
+      setReassignAppts(appts);
+      setReassignMode("delete");
+      setReassignTarget(s);
+      setReassignDraft(null);
+      return;
+    }
+    setConfirmStaff(s);
+  };
+
+  const proceedAfterReassign = async (reassignments: Record<number, number | null>) => {
+    await Promise.all(
+      Object.entries(reassignments).map(([aptId, staffId]) =>
+        supabase.from("appointments").update({ staff_id: staffId }).eq("id", Number(aptId))
+      )
+    );
+
+    const mode   = reassignMode;
+    const target = reassignTarget;
+    const saved  = reassignDraft;
+
+    setReassignAppts([]);
+    setReassignMode(null);
+    setReassignTarget(null);
+    setReassignDraft(null);
+
+    if (mode === "deactivate" && saved) {
+      await handleSaveStaff(saved.draft, saved.id, true);
+    } else if (mode === "delete" && target) {
+      setStaff((prev) => prev.filter((s) => s.id !== target.id));
+      const { error } = await supabase.from("staff").delete().eq("id", target.id);
+      if (error) {
+        setStaff((prev) => [...prev, target]);
+        setToast("Couldn't remove — please try again");
+      } else {
+        setToast(`${target.name} removed`);
       }
     }
   };
@@ -394,7 +468,7 @@ export default function StaffPage() {
                           type="button"
                           className="icon-btn"
                           aria-label={`Remove ${s.name}`}
-                          onClick={() => setConfirmStaff(s)}
+                          onClick={() => handleDeleteClick(s)}
                         >
                           <svg viewBox="0 0 24 24">
                             <polyline points="3 6 5 6 21 6" />
@@ -548,6 +622,23 @@ export default function StaffPage() {
         }
         confirmLabel="Remove"
         cancelLabel="Keep"
+      />
+
+      <StaffReassignModal
+        open={reassignMode !== null}
+        mode={reassignMode ?? "deactivate"}
+        staffName={reassignTarget?.name ?? ""}
+        appointments={reassignAppts}
+        otherStaff={staff
+          .filter((s) => s.active && s.id !== reassignTarget?.id)
+          .map((s) => ({ id: s.id, name: s.name }))}
+        onConfirm={proceedAfterReassign}
+        onCancel={() => {
+          setReassignAppts([]);
+          setReassignMode(null);
+          setReassignTarget(null);
+          setReassignDraft(null);
+        }}
       />
 
       <Toast message={toast} onDone={() => setToast(null)} />

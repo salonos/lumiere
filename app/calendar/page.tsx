@@ -36,6 +36,15 @@ type CalApt = {
 
 type ViewType = "dayGridMonth" | "timeGridWeek" | "timeGridDay";
 
+type DayKey = "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday";
+type DayHours = { open: string; close: string; on: boolean };
+type OpeningHours = Partial<Record<DayKey, DayHours>>;
+
+const DAY_NAMES: DayKey[] = ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
+const DOW_MAP: Record<DayKey, number> = {
+  sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6,
+};
+
 const VIEW_LABELS: Record<ViewType, string> = {
   dayGridMonth: "Month",
   timeGridWeek: "Week",
@@ -114,15 +123,20 @@ function StaffDayView({
   date,
   apts,
   staffCols,
+  openingHours,
   onAptClick,
   onAptDrop,
 }: {
-  date:       string;
-  apts:       CalApt[];
-  staffCols:  StaffCol[];
-  onAptClick: (apt: CalApt) => void;
-  onAptDrop:  (aptId: number, newDate: string, newTime: string, newStaffId: number | null) => void;
+  date:         string;
+  apts:         CalApt[];
+  staffCols:    StaffCol[];
+  openingHours?: OpeningHours;
+  onAptClick:   (apt: CalApt) => void;
+  onAptDrop:    (aptId: number, newDate: string, newTime: string, newStaffId: number | null) => void;
 }) {
+  const dayName  = DAY_NAMES[new Date(date + "T12:00:00").getDay()];
+  const dayHours = openingHours?.[dayName];
+  const isClosed = dayHours ? !dayHours.on : false;
   const scrollRef    = useRef<HTMLDivElement>(null);
   const dragOffsetY  = useRef(0);      // Y offset within block where user grabbed
   const hours        = Array.from({ length: 14 }, (_, i) => 7 + i); // 7…20
@@ -218,7 +232,33 @@ function StaffDayView({
       ref={scrollRef}
       style={{ overflowY: "auto", overflowX: "auto", maxHeight: "calc(100vh - 295px)" }}
     >
-      <div style={{ minWidth: Math.max(560, 64 + cols.length * 180) }}>
+      <div style={{ minWidth: Math.max(560, 64 + cols.length * 180), position: "relative" }}>
+
+        {/* Closed-day overlay */}
+        {isClosed && (
+          <div style={{
+            position: "absolute",
+            inset: 0,
+            background: "rgba(248,246,251,0.92)",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 30,
+            gap: 10,
+          }}>
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" style={{ color: "var(--ink-300)" }}>
+              <circle cx="12" cy="12" r="10" />
+              <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+            </svg>
+            <div style={{ fontSize: 15, fontWeight: 600, color: "var(--ink-500)", letterSpacing: "0.01em" }}>
+              Salon closed
+            </div>
+            <div style={{ fontSize: 12, color: "var(--ink-400)" }}>
+              No appointments can be scheduled on this day
+            </div>
+          </div>
+        )}
 
         {/* Column headers */}
         <div style={{
@@ -489,8 +529,9 @@ export default function CalendarPage() {
   const [toast,      setToast]      = useState<string | null>(null);
 
   // Day view
-  const [dayViewDate, setDayViewDate] = useState<string>(todayIso);
-  const [staffCols,   setStaffCols]   = useState<StaffCol[]>([]);
+  const [dayViewDate,   setDayViewDate]   = useState<string>(todayIso);
+  const [staffCols,     setStaffCols]     = useState<StaffCol[]>([]);
+  const [openingHours,  setOpeningHours]  = useState<OpeningHours>({});
 
   // Load staff columns (+ keep them in sync via Realtime)
   const fetchStaffCols = useCallback(() => {
@@ -519,6 +560,25 @@ export default function CalendarPage() {
 
     return () => { supabase.removeChannel(channel); };
   }, [fetchStaffCols]);
+
+  // ── Fetch opening hours ────────────────────────────────────────────────────
+
+  useEffect(() => {
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data } = await supabase
+        .from("salon_users")
+        .select("salons(opening_hours)")
+        .eq("user_id", user.id)
+        .single();
+      const oh = (data as { salons?: { opening_hours?: unknown } } | null)
+        ?.salons?.opening_hours;
+      if (oh && typeof oh === "object") {
+        setOpeningHours(oh as OpeningHours);
+      }
+    })();
+  }, []);
 
   // ── Fetch appointments ─────────────────────────────────────────────────────
 
@@ -774,6 +834,14 @@ export default function CalendarPage() {
 
   const events = apts.map(aptToEvent);
 
+  const businessHours = Object.entries(openingHours)
+    .filter(([, v]) => v.on)
+    .map(([day, v]) => ({
+      daysOfWeek: [DOW_MAP[day as DayKey]],
+      startTime:  v.open,
+      endTime:    v.close,
+    }));
+
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
@@ -843,6 +911,7 @@ export default function CalendarPage() {
               date={dayViewDate}
               apts={apts.filter((a) => a.date === dayViewDate)}
               staffCols={staffCols}
+              openingHours={openingHours}
               onAptClick={openDetail}
               onAptDrop={handleDayDrop}
             />
@@ -867,6 +936,8 @@ export default function CalendarPage() {
             height={640}
             contentHeight={580}
             handleWindowResize
+            businessHours={businessHours.length > 0 ? businessHours : undefined}
+            eventConstraint={businessHours.length > 0 ? "businessHours" : undefined}
             slotMinTime="07:00:00"
             slotMaxTime="21:00:00"
             allDaySlot={false}
