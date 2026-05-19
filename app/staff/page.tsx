@@ -23,6 +23,7 @@ export default function StaffPage() {
   const [staff,    setStaff]    = useState<StaffRow[]>([]);
   const [stations, setStations] = useState<StationTypeRow[]>([]);
   const [services, setServices] = useState<ServiceStub[]>([]);
+  const [salonId,  setSalonId]  = useState<string | null>(null);
   const [loading,  setLoading]  = useState(true);
 
   // Staff modal state
@@ -40,6 +41,21 @@ export default function StaffPage() {
   // ── Load ──────────────────────────────────────────────────────────────────
 
   useEffect(() => {
+    // Resolve the current user's salon_id so we can pass it explicitly on insert.
+    // Relying on the DB default `current_salon_id()` was failing the RLS
+    // WITH CHECK policy intermittently — passing the id directly is reliable.
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data: link } = await supabase
+        .from("salon_users")
+        .select("salon_id")
+        .eq("user_id", user.id)
+        .single();
+      const sid = (link as { salon_id?: string } | null)?.salon_id ?? null;
+      setSalonId(sid);
+    })();
+
     Promise.all([
       supabase.from("staff").select("*").order("name"),
       supabase.from("station_types").select("*").order("name"),
@@ -97,7 +113,7 @@ export default function StaffPage() {
   };
 
   const handleSaveStaff = async (draft: StaffDraft, id?: number) => {
-    const payload = {
+    const basePayload = {
       name: draft.name,
       role: draft.role || null,
       dob: draft.dob || null,
@@ -106,8 +122,9 @@ export default function StaffPage() {
     };
 
     if (id !== undefined) {
-      const { error } = await supabase.from("staff").update(payload).eq("id", id);
+      const { error } = await supabase.from("staff").update(basePayload).eq("id", id);
       if (error) {
+        console.error("[staff update]", error);
         setToast("Couldn't save changes — please try again");
       } else {
         setStaff((prev) =>
@@ -116,13 +133,35 @@ export default function StaffPage() {
         setToast(`${draft.name} updated`);
       }
     } else {
+      // Resolve salon_id lazily if it hasn't loaded yet — avoids a race
+      // when the user clicks "Add staff" the instant the page renders.
+      let sid = salonId;
+      if (!sid) {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          const { data: link } = await supabase
+            .from("salon_users")
+            .select("salon_id")
+            .eq("user_id", user.id)
+            .single();
+          sid = (link as { salon_id?: string } | null)?.salon_id ?? null;
+          if (sid) setSalonId(sid);
+        }
+      }
+
+      if (!sid) {
+        setToast("Couldn't determine your salon — please sign in again");
+        return;
+      }
+
+      const insertPayload = { ...basePayload, salon_id: sid };
       const { data: rows, error } = await supabase
         .from("staff")
-        .insert(payload)
+        .insert(insertPayload)
         .select();
       if (error) {
-        console.error("[staff insert]", error);
-        setToast("Couldn't add staff member — please try again");
+        console.error("[staff insert]", error, "payload:", insertPayload);
+        setToast(`Couldn't add staff — ${error.message}`);
       } else {
         const created = (rows ?? [])[0] as { id: number } | undefined;
         setStaff((prev) => [
@@ -214,20 +253,25 @@ export default function StaffPage() {
         setToast(`${draft.name} updated`);
       }
     } else {
-      const { data: created, error } = await supabase
+      if (!salonId) {
+        setToast("Couldn't determine your salon — please sign in again");
+        return;
+      }
+      const { data: rows, error } = await supabase
         .from("station_types")
-        .insert(payload)
-        .select()
-        .single();
+        .insert({ ...payload, salon_id: salonId })
+        .select();
       if (error) {
-        setToast("Couldn't add station — please try again");
-      } else if (created) {
-        const newId = (created as { id: number }).id;
+        console.error("[station insert]", error);
+        setToast(`Couldn't add station — ${error.message}`);
+      } else {
+        const created = (rows ?? [])[0] as { id: number } | undefined;
+        const newId = created?.id ?? Date.now();
         setStations((prev) => [
           ...prev,
           { id: newId, name: draft.name, count: draft.count },
         ]);
-        await assignServices(newId, draft.serviceIds);
+        if (created) await assignServices(newId, draft.serviceIds);
         setToast(`${draft.name} added`);
       }
     }
