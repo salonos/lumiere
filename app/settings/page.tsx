@@ -208,17 +208,26 @@ export default function SettingsPage() {
 
     setSaving(false);
 
-    if (error) {
-      console.error("[settings save]", error);
-      showError(humanError(error, "Couldn't save — please check your connection and try again."));
+    // Permission error OR 0 rows updated → the UPDATE RLS policy on `salons`
+    // is almost certainly missing. Same fix for both cases: run the SQL file.
+    const noPermission =
+      error?.code === "42501" ||
+      error?.message?.toLowerCase().includes("permission") ||
+      error?.message?.toLowerCase().includes("policy");
+    const noRowsUpdated = !error && (!updated || updated.length === 0);
+
+    if (noPermission || noRowsUpdated) {
+      console.error("[settings save] RLS / 0-row failure:", error, "updated:", updated);
+      showError(
+        "Your database is missing a one-time update — saves won't work until you run it. " +
+        "Open db/salons_update_policy.sql in your project and paste it into Supabase → SQL Editor."
+      );
       return;
     }
-    if (!updated || updated.length === 0) {
-      // 0 rows updated almost always means the salons UPDATE RLS policy is missing.
-      showError(
-        "Saved nothing — your database needs a one-time update. " +
-        "Open db/salons_update_policy.sql in your project and run it in Supabase."
-      );
+
+    if (error) {
+      console.error("[settings save]", error);
+      showError(humanError(error, "Couldn't save — please try again in a moment."));
       return;
     }
 
