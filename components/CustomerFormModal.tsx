@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Modal from "./Modal";
+import { humanError } from "@/lib/data";
 import { supabase } from "@/lib/supabase";
 
 // ── birthday helpers ───────────────────────────────────────────────────────
@@ -128,13 +129,7 @@ export default function CustomerFormModal({ open, onClose, onSave }: Props) {
     setSaving(false);
 
     if (err) {
-      if (err.code === "42501" || err.message?.toLowerCase().includes("policy")) {
-        setError(
-          "You don't have permission to add customers for this salon. Make sure you're signed in as the salon owner.",
-        );
-      } else {
-        setError(`Could not save: ${err.message}`);
-      }
+      setError(humanError(err, "We couldn't save this customer. Try again in a moment."));
       return;
     }
 

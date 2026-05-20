@@ -8,11 +8,12 @@ import ServiceFormModal, {
   type ServiceDraft,
 } from "@/components/ServiceFormModal";
 import ConfirmDialog from "@/components/ConfirmDialog";
-import Toast from "@/components/Toast";
+import Toast, { type ToastTone } from "@/components/Toast";
 import {
   CATEGORY_BLURB,
   type Service,
   type ServiceCategory,
+  humanError,
   lkr,
 } from "@/lib/data";
 import { supabase } from "@/lib/supabase";
@@ -35,7 +36,11 @@ export default function ServicesPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Service | undefined>(undefined);
   const [confirmTarget, setConfirmTarget] = useState<Service | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast,     setToast]     = useState<string | null>(null);
+  const [toastTone, setToastTone] = useState<ToastTone>("info");
+
+  const showError   = (msg: string) => { setToastTone("error");   setToast(msg); };
+  const showSuccess = (msg: string) => { setToastTone("success"); setToast(msg); };
 
   // ── Load from Supabase on mount ────────────────────────────────────────
 
@@ -46,7 +51,7 @@ export default function ServicesPage() {
       .order("name")
       .then(({ data, error }) => {
         if (error) {
-          setToast("Couldn't load services — please refresh the page");
+          showError("We couldn't load your services. Refresh the page to try again.");
         } else {
           setItems(
             (data ?? []).map((row) => ({
@@ -96,7 +101,7 @@ export default function ServicesPage() {
       setItems((prev) =>
         prev.map((s) => (s.id === id ? { ...s, enabled: !newEnabled } : s)),
       );
-      setToast("Couldn't update — please try again");
+      showError(humanError(error, "We couldn't update that service. Try again in a moment."));
     }
   };
 
@@ -128,7 +133,7 @@ export default function ServicesPage() {
         .eq("id", id);
 
       if (error) {
-        setToast("Couldn't save changes — please try again");
+        showError(humanError(error, "We couldn't save those changes. Try again in a moment."));
       } else {
         setItems((prev) =>
           prev.map((s) =>
@@ -137,7 +142,7 @@ export default function ServicesPage() {
               : s,
           ),
         );
-        setToast(`"${draft.name}" updated`);
+        showSuccess(`"${draft.name}" updated`);
       }
     } else {
       // ── Add new ──
@@ -157,13 +162,13 @@ export default function ServicesPage() {
         .single();
 
       if (error) {
-        setToast("Couldn't add service — please try again");
+        showError(humanError(error, `We couldn't add "${draft.name}". Try again in a moment.`));
       } else if (created) {
         setItems((prev) => [
           ...prev,
           { ...created, description: (created as Service).description ?? "" } as Service,
         ]);
-        setToast(`"${draft.name}" added to your menu`);
+        showSuccess(`"${draft.name}" added to your menu`);
       }
     }
   };
@@ -185,9 +190,9 @@ export default function ServicesPage() {
     if (error) {
       // Revert
       setItems((prev) => [...prev, removed]);
-      setToast("Couldn't remove — please try again");
+      showError(humanError(error, `We couldn't remove "${removed.name}". Try again in a moment.`));
     } else {
-      setToast(`"${removed.name}" removed`);
+      showSuccess(`"${removed.name}" removed`);
     }
   };
 
@@ -380,7 +385,7 @@ export default function ServicesPage() {
         cancelLabel="Keep it"
       />
 
-      <Toast message={toast} onDone={() => setToast(null)} />
+      <Toast message={toast} tone={toastTone} onDone={() => setToast(null)} />
     </div>
   );
 }

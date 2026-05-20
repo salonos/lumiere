@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Modal from "./Modal";
+import { humanError } from "@/lib/data";
 import { supabase } from "@/lib/supabase";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -381,7 +382,7 @@ export default function AppointmentFormModal({
         .single();
 
       if (custErr || !newCust) {
-        setError("Couldn't create customer — please try again.");
+        setError(humanError(custErr, "We couldn't add that customer. Try again in a moment."));
         setSaving(false);
         return;
       }
@@ -401,7 +402,7 @@ export default function AppointmentFormModal({
 
     setSaving(false);
     if (err) {
-      setError(`Could not save: ${err.message}`);
+      setError(humanError(err, "We couldn't save this appointment. Try again in a moment."));
       return;
     }
     onSave();

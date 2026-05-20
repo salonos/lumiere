@@ -5,7 +5,8 @@ import Link from "next/link";
 import Sidebar from "@/components/Sidebar";
 import MobileTopBar from "@/components/MobileTopBar";
 import MobileTabBar from "@/components/MobileTabBar";
-import Toast from "@/components/Toast";
+import Toast, { type ToastTone } from "@/components/Toast";
+import { humanError } from "@/lib/data";
 import { supabase } from "@/lib/supabase";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -92,7 +93,11 @@ function countDirtyFields<T extends Record<string, unknown>>(
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState("salon");
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast,     setToast]     = useState<string | null>(null);
+  const [toastTone, setToastTone] = useState<ToastTone>("info");
+
+  const showError   = (msg: string) => { setToastTone("error"); setToast(msg); };
+  const showSuccess = (msg: string) => { setToastTone("success"); setToast(msg); };
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -177,7 +182,11 @@ export default function SettingsPage() {
   const save = async () => {
     if (saving) return;
     if (!salonId) {
-      setToast("Couldn't determine your salon — please refresh");
+      showError("We couldn't find your salon — please refresh the page and try again.");
+      return;
+    }
+    if (!salon.name.trim()) {
+      showError("Your salon needs a name before you can save.");
       return;
     }
     setSaving(true);
@@ -185,13 +194,13 @@ export default function SettingsPage() {
     const { data: updated, error } = await supabase
       .from("salons")
       .update({
-        name:          salon.name,
-        tagline:       salon.tagline || null,
-        phone:         salon.phone || null,
-        whatsapp:      salon.whatsapp || null,
-        address:       salon.address || null,
-        city:          salon.city || null,
-        booking_slug:  salon.bookingSlug || null,
+        name:          salon.name.trim(),
+        tagline:       salon.tagline.trim() || null,
+        phone:         salon.phone.trim() || null,
+        whatsapp:      salon.whatsapp.trim() || null,
+        address:       salon.address.trim() || null,
+        city:          salon.city.trim() || null,
+        booking_slug:  salon.bookingSlug.trim() || null,
         opening_hours: hours,
       })
       .eq("id", salonId)
@@ -199,15 +208,24 @@ export default function SettingsPage() {
 
     setSaving(false);
 
-    if (error || !updated || updated.length === 0) {
-      setToast("Couldn't save — please try again");
+    if (error) {
+      console.error("[settings save]", error);
+      showError(humanError(error, "Couldn't save — please check your connection and try again."));
+      return;
+    }
+    if (!updated || updated.length === 0) {
+      // 0 rows updated almost always means the salons UPDATE RLS policy is missing.
+      showError(
+        "Saved nothing — your database needs a one-time update. " +
+        "Open db/salons_update_policy.sql in your project and run it in Supabase."
+      );
       return;
     }
 
     setSavedSalon(salon);
     setSavedHours(hours);
     setSavedReminders(reminders);
-    setToast("Changes saved");
+    showSuccess("Changes saved");
   };
 
   const discard = () => {
@@ -561,7 +579,7 @@ export default function SettingsPage() {
       </main>
 
       <MobileTabBar />
-      <Toast message={toast} onDone={() => setToast(null)} />
+      <Toast message={toast} tone={toastTone} onDone={() => setToast(null)} />
     </div>
   );
 }

@@ -303,9 +303,28 @@ export default async function DashboardPage() {
 
           <div className="timeline">
             {rows.length === 0 ? (
-              <p style={{ padding: "24px 0", opacity: 0.5, fontSize: 14 }}>
-                No appointments scheduled for today.
-              </p>
+              <div style={{
+                padding: "40px 24px",
+                textAlign: "center",
+                background: "var(--cream)",
+                border: "1px dashed var(--ink-200)",
+                borderRadius: 14,
+              }}>
+                <div style={{
+                  fontFamily: "var(--font-serif)",
+                  fontSize: 18,
+                  color: "var(--plum-900)",
+                  fontWeight: 500,
+                  marginBottom: 6,
+                }}>
+                  A quiet day ahead
+                </div>
+                <div style={{ fontSize: 13, color: "var(--ink-500)", marginBottom: 16, lineHeight: 1.5 }}>
+                  Nothing on the books today. Use this time to catch up,
+                  or book a customer in.
+                </div>
+                <NewAppointmentButton />
+              </div>
             ) : (
               rows.map((apt) => (
                 <AppointmentRow key={apt.startTime + apt.customerName} {...apt} />

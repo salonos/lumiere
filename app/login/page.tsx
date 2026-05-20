@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { humanError } from "@/lib/data";
 
 // Inner component — uses useSearchParams safely inside a Suspense boundary
 function LoginForm() {
@@ -35,7 +36,7 @@ function LoginForm() {
       setError(
         authError.message === "Invalid login credentials"
           ? "That email and password don't match. Please try again."
-          : authError.message,
+          : humanError(authError, "We couldn't sign you in. Try again in a moment."),
       );
       return;
     }

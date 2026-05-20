@@ -11,7 +11,8 @@ import MobileTopBar from "@/components/MobileTopBar";
 import MobileTabBar from "@/components/MobileTabBar";
 import AppointmentFormModal from "@/components/AppointmentFormModal";
 import AppointmentDetailModal from "@/components/AppointmentDetailModal";
-import Toast from "@/components/Toast";
+import Toast, { type ToastTone } from "@/components/Toast";
+import { humanError } from "@/lib/data";
 import { supabase } from "@/lib/supabase";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -527,6 +528,11 @@ export default function CalendarPage() {
   const [rescheduling,   setRescheduling]   = useState(false);
   const [savingId,   setSavingId]   = useState<number | null>(null);
   const [toast,      setToast]      = useState<string | null>(null);
+  const [toastTone,  setToastTone]  = useState<ToastTone>("info");
+  const [aptsLoading,setAptsLoading]= useState(true);
+
+  const showError   = (msg: string) => { setToastTone("error");   setToast(msg); };
+  const showSuccess = (msg: string) => { setToastTone("success"); setToast(msg); };
 
   // Day view
   const [dayViewDate,   setDayViewDate]   = useState<string>(todayIso);
@@ -617,6 +623,7 @@ export default function CalendarPage() {
       paymentMethod:  (r.payment_method as string | null) ?? null,
       discountAmount: (r.discount_amount as number) ?? 0,
     })));
+    setAptsLoading(false);
   }, []);
 
   useEffect(() => { fetchApts(); }, [fetchApts]);
@@ -713,10 +720,10 @@ export default function CalendarPage() {
 
     if (error) {
       arg.revert();
-      setToast("Couldn't reschedule — please try again");
+      showError(humanError(error, "We couldn't reschedule that appointment. Try again in a moment."));
     } else {
       fetchApts();
-      setToast(`${apt.customerName} moved to ${newDate} at ${newTime}`);
+      showSuccess(`${apt.customerName} moved to ${newDate} at ${newTime}`);
     }
   };
 
@@ -743,7 +750,7 @@ export default function CalendarPage() {
       .eq("id", aptId);
 
     if (error) {
-      setToast("Couldn't move appointment — please try again");
+      showError(humanError(error, "We couldn't move that appointment. Try again in a moment."));
       return;
     }
 
@@ -755,7 +762,7 @@ export default function CalendarPage() {
     });
 
     fetchApts();
-    setToast(`${apt.customerName} → ${timeLabel} · ${staffLabel}`);
+    showSuccess(`${apt.customerName} → ${timeLabel} · ${staffLabel}`);
   }, [apts, staffCols, fetchApts]);
 
   // ── Reschedule via popup ───────────────────────────────────────────────────
@@ -770,11 +777,11 @@ export default function CalendarPage() {
     setRescheduling(false);
 
     if (error) {
-      setToast("Couldn't reschedule — please try again");
+      showError(humanError(error, "We couldn't reschedule that appointment. Try again in a moment."));
     } else {
       setDetailApt(null);
       fetchApts();
-      setToast("Appointment rescheduled");
+      showSuccess("Appointment rescheduled");
     }
   };
 
@@ -801,7 +808,7 @@ export default function CalendarPage() {
 
     if (error) {
       setSavingId(null);
-      setToast("Couldn't update — please try again");
+      showError(humanError(error, "We couldn't update that appointment. Try again in a moment."));
       return;
     }
 
@@ -825,7 +832,7 @@ export default function CalendarPage() {
     setSavingId(null);
     setDetailApt(null);
     fetchApts();
-    setToast(
+    showSuccess(
       newStatus === "completed"   ? "Marked complete — customer stats updated"
       : newStatus === "cancelled" ? "Appointment cancelled"
       : "Appointment confirmed",
@@ -904,8 +911,20 @@ export default function CalendarPage() {
           </button>
         </div>
 
+        {/* ── First-load skeleton ── */}
+        {aptsLoading && (
+          <div style={{
+            padding: "48px 0",
+            textAlign: "center",
+            color: "var(--ink-400)",
+            fontSize: 14,
+          }}>
+            Loading your schedule…
+          </div>
+        )}
+
         {/* ── Custom Staff Day View ── */}
-        {view === "timeGridDay" && (
+        {!aptsLoading && view === "timeGridDay" && (
           <div className="cal-card" style={{ padding: 0, overflow: "hidden" }}>
             <StaffDayView
               date={dayViewDate}
@@ -921,7 +940,7 @@ export default function CalendarPage() {
         {/* ── FullCalendar (Month + Week) ── */}
         <div
           className="cal-card"
-          style={{ display: view === "timeGridDay" ? "none" : undefined }}
+          style={{ display: aptsLoading || view === "timeGridDay" ? "none" : undefined }}
         >
           <FullCalendar
             ref={calRef}
@@ -992,7 +1011,7 @@ export default function CalendarPage() {
         saving={savingId === detailApt?.id}
       />
 
-      <Toast message={toast} onDone={() => setToast(null)} />
+      <Toast message={toast} tone={toastTone} onDone={() => setToast(null)} />
     </div>
   );
 }

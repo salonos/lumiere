@@ -14,8 +14,8 @@ import StationTypeFormModal, {
 } from "@/components/StationTypeFormModal";
 import StaffReassignModal, { type UpcomingApt } from "@/components/StaffReassignModal";
 import ConfirmDialog from "@/components/ConfirmDialog";
-import Toast from "@/components/Toast";
-import { lkr } from "@/lib/data";
+import Toast, { type ToastTone } from "@/components/Toast";
+import { lkr, humanError } from "@/lib/data";
 import { supabase } from "@/lib/supabase";
 
 type ServiceStub = { id: number; name: string; category: string; station_type_id: number | null };
@@ -37,7 +37,11 @@ export default function StaffPage() {
   const [editingStation, setEditingStation] = useState<StationTypeRow | undefined>();
   const [confirmStation, setConfirmStation] = useState<StationTypeRow | null>(null);
 
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast,     setToast]     = useState<string | null>(null);
+  const [toastTone, setToastTone] = useState<ToastTone>("info");
+
+  const showError   = (msg: string) => { setToastTone("error");   setToast(msg); };
+  const showSuccess = (msg: string) => { setToastTone("success"); setToast(msg); };
 
   // Reassign-before-deactivate/delete state
   const [reassignAppts,  setReassignAppts]  = useState<UpcomingApt[]>([]);
@@ -71,7 +75,7 @@ export default function StaffPage() {
       supabase.from("services").select("id, name, category, station_type_id").order("category").order("name"),
     ]).then(([staffRes, stationRes, svcRes]) => {
       if (staffRes.error) {
-        setToast("Couldn't load staff — please refresh");
+        showError("We couldn't load your team. Refresh the page to try again.");
       } else {
         setStaff(
           (staffRes.data ?? []).map((r) => ({
@@ -85,7 +89,7 @@ export default function StaffPage() {
         );
       }
       if (stationRes.error) {
-        setToast("Couldn't load stations — please refresh");
+        showError("We couldn't load your stations. Refresh the page to try again.");
       } else {
         setStations(
           (stationRes.data ?? []).map((r) => ({
@@ -181,12 +185,12 @@ export default function StaffPage() {
       const { error } = await supabase.from("staff").update(basePayload).eq("id", id);
       if (error) {
         console.error("[staff update]", error);
-        setToast("Couldn't save changes — please try again");
+        showError(humanError(error, "We couldn't save those changes. Try again in a moment."));
       } else {
         setStaff((prev) =>
           prev.map((s) => (s.id === id ? { ...s, ...draft } : s))
         );
-        setToast(`${draft.name} updated`);
+        showSuccess(`${draft.name} updated`);
       }
     } else {
       // Resolve salon_id lazily if it hasn't loaded yet — avoids a race
@@ -206,7 +210,7 @@ export default function StaffPage() {
       }
 
       if (!sid) {
-        setToast("Couldn't determine your salon — please sign in again");
+        showError("We couldn't tell which salon you belong to. Sign out and back in to fix this.");
         return;
       }
 
@@ -217,7 +221,7 @@ export default function StaffPage() {
         .select();
       if (error) {
         console.error("[staff insert]", error, "payload:", insertPayload);
-        setToast(`Couldn't add staff — ${error.message}`);
+        showError(humanError(error, `We couldn't add ${draft.name}. Try again in a moment.`));
       } else {
         const created = (rows ?? [])[0] as { id: number } | undefined;
         setStaff((prev) => [
@@ -231,7 +235,7 @@ export default function StaffPage() {
             active: draft.active,
           },
         ]);
-        setToast(`${draft.name} added to your team`);
+        showSuccess(`${draft.name} added to your team`);
       }
     }
   };
@@ -274,9 +278,9 @@ export default function StaffPage() {
       const { error } = await supabase.from("staff").delete().eq("id", target.id);
       if (error) {
         setStaff((prev) => [...prev, target]);
-        setToast("Couldn't remove — please try again");
+        showError(humanError(error, `We couldn't remove ${target.name}. Try again in a moment.`));
       } else {
-        setToast(`${target.name} removed`);
+        showSuccess(`${target.name} removed`);
       }
     }
   };
@@ -288,9 +292,9 @@ export default function StaffPage() {
     const { error } = await supabase.from("staff").delete().eq("id", removed.id);
     if (error) {
       setStaff((prev) => [...prev, removed]);
-      setToast("Couldn't remove — please try again");
+      showError(humanError(error, `We couldn't remove ${removed.name}. Try again in a moment.`));
     } else {
-      setToast(`${removed.name} removed`);
+      showSuccess(`${removed.name} removed`);
     }
   };
 
@@ -345,17 +349,17 @@ export default function StaffPage() {
     if (id !== undefined) {
       const { error } = await supabase.from("station_types").update(payload).eq("id", id);
       if (error) {
-        setToast("Couldn't save changes — please try again");
+        showError(humanError(error, "We couldn't save those changes. Try again in a moment."));
       } else {
         setStations((prev) =>
           prev.map((s) => (s.id === id ? { ...s, ...draft } : s))
         );
         await assignServices(id, draft.serviceIds);
-        setToast(`${draft.name} updated`);
+        showSuccess(`${draft.name} updated`);
       }
     } else {
       if (!salonId) {
-        setToast("Couldn't determine your salon — please sign in again");
+        showError("We couldn't tell which salon you belong to. Sign out and back in to fix this.");
         return;
       }
       const { data: rows, error } = await supabase
@@ -364,7 +368,7 @@ export default function StaffPage() {
         .select();
       if (error) {
         console.error("[station insert]", error);
-        setToast(`Couldn't add station — ${error.message}`);
+        showError(humanError(error, `We couldn't add ${draft.name}. Try again in a moment.`));
       } else {
         const created = (rows ?? [])[0] as { id: number } | undefined;
         const newId = created?.id ?? Date.now();
@@ -373,7 +377,7 @@ export default function StaffPage() {
           { id: newId, name: draft.name, count: draft.count },
         ]);
         if (created) await assignServices(newId, draft.serviceIds);
-        setToast(`${draft.name} added`);
+        showSuccess(`${draft.name} added`);
       }
     }
   };
@@ -385,9 +389,9 @@ export default function StaffPage() {
     const { error } = await supabase.from("station_types").delete().eq("id", removed.id);
     if (error) {
       setStations((prev) => [...prev, removed]);
-      setToast("Couldn't remove — please try again");
+      showError(humanError(error, `We couldn't remove ${removed.name}. Try again in a moment.`));
     } else {
-      setToast(`${removed.name} removed`);
+      showSuccess(`${removed.name} removed`);
     }
   };
 
@@ -670,7 +674,7 @@ export default function StaffPage() {
         }}
       />
 
-      <Toast message={toast} onDone={() => setToast(null)} />
+      <Toast message={toast} tone={toastTone} onDone={() => setToast(null)} />
     </div>
   );
 }

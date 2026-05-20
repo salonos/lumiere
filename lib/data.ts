@@ -82,3 +82,55 @@ export const MONTHS_LONG = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
 ];
+
+// Format an ISO date (YYYY-MM-DD) as "Mon, 14 May" or similar.
+export function formatDateShort(iso: string): string {
+  const d = parseISODate(iso);
+  return `${DOW_SHORT[d.getDay()]}, ${d.getDate()} ${MONTHS_LONG[d.getMonth()].slice(0, 3)}`;
+}
+
+export function formatDateLong(iso: string): string {
+  const d = parseISODate(iso);
+  return `${DOW_LONG[d.getDay()]}, ${d.getDate()} ${MONTHS_LONG[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+// ── Error helpers ─────────────────────────────────────────────────────────
+
+/**
+ * Translate a raw Supabase/PostgREST error into a sentence a salon owner
+ * (not a developer) can understand and act on. Use this whenever you would
+ * otherwise show `error.message` in a Toast.
+ *
+ * Action lives in the second sentence — "please try again", "please refresh",
+ * "your account may need a database update", etc.
+ */
+export function humanError(
+  err: { code?: string; message?: string } | null | undefined,
+  fallback = "Something went wrong — please try again",
+): string {
+  if (!err) return fallback;
+  const msg = (err.message ?? "").toLowerCase();
+  const code = err.code ?? "";
+
+  // RLS / permission failures
+  if (code === "42501" || msg.includes("row-level security") || msg.includes("permission denied")) {
+    return "You don't have permission for that — please sign out and back in.";
+  }
+  // Missing row after RLS-blocked write
+  if (code === "PGRST116") {
+    return "We saved nothing — your account may need a quick database update. See db/salons_update_policy.sql.";
+  }
+  // Unique constraint
+  if (code === "23505" || msg.includes("duplicate key")) {
+    return "That already exists — try a different name.";
+  }
+  // Network / offline
+  if (msg.includes("failed to fetch") || msg.includes("network")) {
+    return "Couldn't reach the server — check your internet and try again.";
+  }
+  // Auth missing
+  if (msg.includes("jwt") || msg.includes("not authenticated")) {
+    return "Your session expired — please sign in again.";
+  }
+  return fallback;
+}
