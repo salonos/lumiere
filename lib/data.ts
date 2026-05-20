@@ -122,40 +122,63 @@ export function slugify(input: string): string {
  * "your account may need a database update", etc.
  */
 export function humanError(
-  err: { code?: string; message?: string } | null | undefined,
+  err: { code?: string; message?: string; details?: string; hint?: string } | null | undefined,
   fallback = "Something went wrong — please try again",
 ): string {
   if (!err) return fallback;
   const msg = (err.message ?? "").toLowerCase();
   const code = err.code ?? "";
 
-  // RLS / permission failures
+  // ── Auth / session ────────────────────────────────────────────────────
+  if (code === "PGRST301" || code === "PGRST302" || msg.includes("jwt") || msg.includes("not authenticated")) {
+    return "Your session expired — please sign in again.";
+  }
+
+  // ── Permissions / RLS ─────────────────────────────────────────────────
   if (code === "42501" || msg.includes("row-level security") || msg.includes("permission denied")) {
     return "You don't have permission for that — please sign out and back in.";
   }
   // Missing row after RLS-blocked write
-  if (code === "PGRST116") {
+  if (code === "PGRST116" || code === "PGRST204") {
     return "We saved nothing — your account may need a quick database update. See db/salons_update_policy.sql.";
   }
-  // Unique constraint
+
+  // ── Schema issues (the user's DB is out of sync) ──────────────────────
+  if (code === "42703" || msg.includes("column") && msg.includes("does not exist")) {
+    return "Your database is missing a column we need. Re-run db/reset.sql or db/opening_hours.sql in Supabase.";
+  }
+  if (code === "42P01" || msg.includes("relation") && msg.includes("does not exist")) {
+    return "A database table is missing. Re-run db/reset.sql in Supabase to set everything up.";
+  }
+
+  // ── Constraint violations ─────────────────────────────────────────────
   if (code === "23505" || msg.includes("duplicate key")) {
     return "That already exists — try a different name.";
   }
-  // NOT NULL constraint
   if (code === "23502" || msg.includes("violates not-null")) {
     return "A required field is empty — please fill in every required field.";
   }
-  // Check constraint / invalid value
   if (code === "23514" || msg.includes("check constraint")) {
     return "One of the values isn't valid — please review and try again.";
   }
-  // Network / offline
-  if (msg.includes("failed to fetch") || msg.includes("network")) {
+  if (code === "23503" || msg.includes("foreign key")) {
+    return "That refers to something that's been removed — please refresh the page.";
+  }
+
+  // ── Data type issues ──────────────────────────────────────────────────
+  if (code === "22P02" || msg.includes("invalid input syntax")) {
+    return "One of the values is in the wrong format — please check your entries.";
+  }
+  if (code === "22001" || msg.includes("value too long")) {
+    return "One of the values is too long — try shortening it.";
+  }
+
+  // ── Network / connectivity ────────────────────────────────────────────
+  if (msg.includes("failed to fetch") || msg.includes("network") || msg.includes("fetch failed")) {
     return "Couldn't reach the server — check your internet and try again.";
   }
-  // Auth missing
-  if (msg.includes("jwt") || msg.includes("not authenticated")) {
-    return "Your session expired — please sign in again.";
-  }
-  return fallback;
+
+  // ── Unknown — surface the technical detail so the user can report it ──
+  const detail = code || err.message?.slice(0, 60) || "unknown";
+  return `${fallback} (error: ${detail})`;
 }

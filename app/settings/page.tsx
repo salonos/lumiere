@@ -95,6 +95,7 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState("salon");
   const [toast,     setToast]     = useState<string | null>(null);
   const [toastTone, setToastTone] = useState<ToastTone>("info");
+  const [schemaWarning, setSchemaWarning] = useState<string | null>(null);
 
   const showError   = (msg: string) => { setToastTone("error"); setToast(msg); };
   const showSuccess = (msg: string) => { setToastTone("success"); setToast(msg); };
@@ -140,12 +141,34 @@ export default function SettingsPage() {
 
       if (!sid) { setLoading(false); return; }
 
-      // Step 2 — fetch salon profile separately
-      const { data: s } = await supabase
+      // Step 2 — fetch salon profile separately. Try with opening_hours first;
+      // if that fails (column missing on older DBs), retry without and surface
+      // a banner so the user knows to run the migration.
+      let { data: s, error: salonErr } = await supabase
         .from("salons")
         .select("name, tagline, phone, whatsapp, address, city, booking_slug, opening_hours")
         .eq("id", sid)
         .single();
+
+      if (salonErr && (salonErr.code === "42703" || salonErr.message?.includes("opening_hours"))) {
+        console.warn("[settings] opening_hours column missing — falling back", salonErr);
+        if (!cancelled) {
+          setSchemaWarning(
+            "Your database is missing the opening_hours column. " +
+            "Run db/opening_hours.sql in your Supabase SQL Editor to enable opening hours."
+          );
+        }
+        ({ data: s, error: salonErr } = await supabase
+          .from("salons")
+          .select("name, tagline, phone, whatsapp, address, city, booking_slug")
+          .eq("id", sid)
+          .single());
+      }
+
+      if (salonErr) {
+        console.error("[settings] could not load salon profile:", salonErr);
+        if (!cancelled) showError(humanError(salonErr, "We couldn't load your salon details."));
+      }
 
       if (!cancelled && s) {
         const r = s as Record<string, unknown>;
@@ -215,20 +238,39 @@ export default function SettingsPage() {
 
     setSaving(true);
 
-    const { data: updated, error } = await supabase
+    const fullPayload = {
+      name:          cleanName,
+      tagline:       cleanTagline || null,
+      phone:         cleanPhone   || null,
+      whatsapp:      cleanWhats   || null,
+      address:       cleanAddr    || null,
+      city:          cleanCity    || null,
+      booking_slug:  cleanSlug,
+      opening_hours: hours,
+    };
+
+    let { data: updated, error } = await supabase
       .from("salons")
-      .update({
-        name:          cleanName,
-        tagline:       cleanTagline || null,
-        phone:         cleanPhone   || null,
-        whatsapp:      cleanWhats   || null,
-        address:       cleanAddr    || null,
-        city:          cleanCity    || null,
-        booking_slug:  cleanSlug,
-        opening_hours: hours,
-      })
+      .update(fullPayload)
       .eq("id", salonId)
       .select("id");
+
+    // If opening_hours column is missing, retry without it so other settings
+    // can still be saved, and surface a banner about the migration.
+    if (error?.code === "42703" || error?.message?.includes("opening_hours")) {
+      console.warn("[settings save] opening_hours column missing — retrying without", error);
+      setSchemaWarning(
+        "Your database is missing the opening_hours column. " +
+        "Run db/opening_hours.sql in your Supabase SQL Editor to enable opening hours."
+      );
+      const { opening_hours, ...partialPayload } = fullPayload;
+      void opening_hours;
+      ({ data: updated, error } = await supabase
+        .from("salons")
+        .update(partialPayload)
+        .eq("id", salonId)
+        .select("id"));
+    }
 
     setSaving(false);
 
@@ -260,9 +302,16 @@ export default function SettingsPage() {
       return;
     }
 
-    // 3) Any other error
+    // 3) Any other error — log the FULL error so we can see code, message,
+    // details, and hint in the browser console for debugging
     if (error) {
-      console.error("[settings save]", error);
+      console.error("[settings save] FAILED", {
+        code:    error.code,
+        message: error.message,
+        details: error.details,
+        hint:    error.hint,
+        full:    error,
+      });
       showError(humanError(error, "We couldn't save those changes. Please try again in a moment."));
       return;
     }
@@ -328,6 +377,41 @@ export default function SettingsPage() {
             — we&rsquo;ll remember it.
           </p>
         </header>
+
+        {schemaWarning && (
+          <div style={{
+            marginBottom: 24,
+            padding: "14px 18px",
+            background: "#FFF4E5",
+            border: "1px solid #F4C77A",
+            borderRadius: 12,
+            display: "flex",
+            gap: 12,
+            alignItems: "flex-start",
+          }}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#A55A00" strokeWidth="2" style={{ flexShrink: 0, marginTop: 1 }}>
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+              <line x1="12" y1="9" x2="12" y2="13" />
+              <line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#7A4400", marginBottom: 2 }}>
+                One-time database update needed
+              </div>
+              <div style={{ fontSize: 13, color: "#7A4400", lineHeight: 1.5 }}>
+                {schemaWarning}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSchemaWarning(null)}
+              aria-label="Dismiss"
+              style={{ background: "none", border: "none", color: "#7A4400", cursor: "pointer", fontSize: 18, lineHeight: 1, padding: 4 }}
+            >
+              ×
+            </button>
+          </div>
+        )}
 
         <div className="settings-layout">
           <nav className="tabs-nav">
