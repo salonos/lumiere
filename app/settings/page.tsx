@@ -6,7 +6,7 @@ import Sidebar from "@/components/Sidebar";
 import MobileTopBar from "@/components/MobileTopBar";
 import MobileTabBar from "@/components/MobileTabBar";
 import Toast, { type ToastTone } from "@/components/Toast";
-import { humanError } from "@/lib/data";
+import { humanError, slugify } from "@/lib/data";
 import { supabase } from "@/lib/supabase";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -185,22 +185,46 @@ export default function SettingsPage() {
       showError("We couldn't find your salon — please refresh the page and try again.");
       return;
     }
-    if (!salon.name.trim()) {
+
+    // ── Per-field validation (NOT NULL columns in the DB) ──
+    const cleanName    = salon.name.trim();
+    const cleanTagline = salon.tagline.trim();
+    const cleanPhone   = salon.phone.trim();
+    const cleanWhats   = salon.whatsapp.trim();
+    const cleanAddr    = salon.address.trim();
+    const cleanCity    = salon.city.trim();
+
+    if (!cleanName) {
       showError("Your salon needs a name before you can save.");
       return;
     }
+
+    // booking_slug is NOT NULL UNIQUE in the DB. Auto-generate it from the
+    // salon name if the user left the field blank — much friendlier than
+    // failing with a NOT NULL violation.
+    let cleanSlug = slugify(salon.bookingSlug);
+    if (!cleanSlug) cleanSlug = slugify(cleanName);
+    if (!cleanSlug) {
+      showError("Add a booking link slug or use letters in your salon name (we use it to make a link).");
+      return;
+    }
+    // Reflect the cleaned slug back to the UI so the user sees what we're saving
+    if (cleanSlug !== salon.bookingSlug) {
+      setSalon((s) => ({ ...s, bookingSlug: cleanSlug }));
+    }
+
     setSaving(true);
 
     const { data: updated, error } = await supabase
       .from("salons")
       .update({
-        name:          salon.name.trim(),
-        tagline:       salon.tagline.trim() || null,
-        phone:         salon.phone.trim() || null,
-        whatsapp:      salon.whatsapp.trim() || null,
-        address:       salon.address.trim() || null,
-        city:          salon.city.trim() || null,
-        booking_slug:  salon.bookingSlug.trim() || null,
+        name:          cleanName,
+        tagline:       cleanTagline || null,
+        phone:         cleanPhone   || null,
+        whatsapp:      cleanWhats   || null,
+        address:       cleanAddr    || null,
+        city:          cleanCity    || null,
+        booking_slug:  cleanSlug,
         opening_hours: hours,
       })
       .eq("id", salonId)
@@ -208,8 +232,19 @@ export default function SettingsPage() {
 
     setSaving(false);
 
-    // Permission error OR 0 rows updated → the UPDATE RLS policy on `salons`
-    // is almost certainly missing. Same fix for both cases: run the SQL file.
+    // ── Specific error handling, in priority order ────────────────────────
+
+    // 1) Unique constraint on booking_slug → the slug is taken
+    if (error?.code === "23505" || error?.message?.toLowerCase().includes("duplicate key")) {
+      console.error("[settings save] duplicate slug:", error);
+      showError(
+        `The booking link "${cleanSlug}" is already taken by another salon. ` +
+        "Try a different one (e.g. add your city or a number)."
+      );
+      return;
+    }
+
+    // 2) Permission error OR 0 rows updated → the UPDATE RLS policy is missing
     const noPermission =
       error?.code === "42501" ||
       error?.message?.toLowerCase().includes("permission") ||
@@ -225,13 +260,26 @@ export default function SettingsPage() {
       return;
     }
 
+    // 3) Any other error
     if (error) {
       console.error("[settings save]", error);
-      showError(humanError(error, "Couldn't save — please try again in a moment."));
+      showError(humanError(error, "We couldn't save those changes. Please try again in a moment."));
       return;
     }
 
-    setSavedSalon(salon);
+    // ── Success ───────────────────────────────────────────────────────────
+    const savedProfile = {
+      ...salon,
+      name:        cleanName,
+      tagline:     cleanTagline,
+      phone:       cleanPhone,
+      whatsapp:    cleanWhats,
+      address:     cleanAddr,
+      city:        cleanCity,
+      bookingSlug: cleanSlug,
+    };
+    setSalon(savedProfile);
+    setSavedSalon(savedProfile);
     setSavedHours(hours);
     setSavedReminders(reminders);
     showSuccess("Changes saved");
@@ -322,9 +370,15 @@ export default function SettingsPage() {
                   <input
                     className="input"
                     type="text"
+                    placeholder="e.g. Pastel 93"
                     value={salon.name}
                     onChange={(e) => setSalon({ ...salon, name: e.target.value })}
                   />
+                  {!salon.name.trim() && (
+                    <div className="field-hint" style={{ color: "#A53A2C" }}>
+                      Required — your salon needs a name to be saved.
+                    </div>
+                  )}
                 </div>
                 <div className="field field-full">
                   <label>Tagline</label>
@@ -375,18 +429,22 @@ export default function SettingsPage() {
                   />
                 </div>
                 <div className="field">
-                  <label>Booking page slug</label>
+                  <label>Booking page link</label>
                   <input
                     className="input"
                     type="text"
+                    placeholder={salon.name ? slugify(salon.name) || "your-salon" : "your-salon"}
                     value={salon.bookingSlug}
                     onChange={(e) => setSalon({ ...salon, bookingSlug: e.target.value })}
+                    onBlur={(e) => setSalon({ ...salon, bookingSlug: slugify(e.target.value) })}
                   />
-                  {salon.bookingSlug && (
-                    <div className="field-hint">
-                      Your link: <code>/book/{salon.bookingSlug}</code>
-                    </div>
-                  )}
+                  <div className="field-hint">
+                    {salon.bookingSlug ? (
+                      <>Your link: <code>/book/{slugify(salon.bookingSlug)}</code></>
+                    ) : (
+                      <>Leave blank and we&rsquo;ll make one from your salon name. Only letters, numbers and hyphens.</>
+                    )}
+                  </div>
                 </div>
               </div>
             </section>
@@ -559,9 +617,11 @@ export default function SettingsPage() {
             {/* ── Save bar ── */}
             <div className="save-bar">
               <div className="save-bar-text">
-                {dirtyCount > 0
-                  ? `${dirtyCount} unsaved change${dirtyCount !== 1 ? "s" : ""}`
-                  : "All changes saved"}
+                {!salon.name.trim()
+                  ? <span style={{ color: "#A53A2C" }}>Your salon needs a name before you can save</span>
+                  : dirtyCount > 0
+                    ? `${dirtyCount} unsaved change${dirtyCount !== 1 ? "s" : ""}`
+                    : "All changes saved"}
               </div>
               <div className="save-bar-actions">
                 <button
@@ -576,7 +636,8 @@ export default function SettingsPage() {
                   type="button"
                   className="btn btn-primary"
                   onClick={save}
-                  disabled={dirtyCount === 0 || saving}
+                  disabled={dirtyCount === 0 || saving || !salon.name.trim()}
+                  title={!salon.name.trim() ? "Add a salon name first" : undefined}
                 >
                   {saving ? "Saving…" : "Save changes"}
                 </button>

@@ -94,6 +94,23 @@ export function formatDateLong(iso: string): string {
   return `${DOW_LONG[d.getDay()]}, ${d.getDate()} ${MONTHS_LONG[d.getMonth()]} ${d.getFullYear()}`;
 }
 
+// ── Slug helpers ──────────────────────────────────────────────────────────
+
+/**
+ * Generate a URL-safe slug from a string. Lowercases, replaces spaces and
+ * punctuation with hyphens, strips leading/trailing hyphens.
+ * Used for booking_slug auto-generation when the user leaves it blank.
+ */
+export function slugify(input: string): string {
+  return input
+    .toLowerCase()
+    .trim()
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")  // strip accents
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+}
+
 // ── Error helpers ─────────────────────────────────────────────────────────
 
 /**
@@ -123,6 +140,14 @@ export function humanError(
   // Unique constraint
   if (code === "23505" || msg.includes("duplicate key")) {
     return "That already exists — try a different name.";
+  }
+  // NOT NULL constraint
+  if (code === "23502" || msg.includes("violates not-null")) {
+    return "A required field is empty — please fill in every required field.";
+  }
+  // Check constraint / invalid value
+  if (code === "23514" || msg.includes("check constraint")) {
+    return "One of the values isn't valid — please review and try again.";
   }
   // Network / offline
   if (msg.includes("failed to fetch") || msg.includes("network")) {
