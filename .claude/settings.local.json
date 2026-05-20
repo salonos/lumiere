@@ -31,7 +31,10 @@
       "Bash(Measure-Object -Line)",
       "Bash(Select-Object -ExpandProperty Lines)",
       "PowerShell(\\(Get-Content \"D:\\\\SalonOS\\\\app\\\\globals.css\"\\).Count)",
-      "Bash(Get-ChildItem -Path \"D:\\\\SalonOS\" -Recurse -Directory)"
+      "Bash(Get-ChildItem -Path \"D:\\\\SalonOS\" -Recurse -Directory)",
+      "Bash(npx --prefix D:/SalonOS tsc --project D:/SalonOS/tsconfig.json --noEmit)",
+      "Bash(git -C \"D:/SalonOS\" add app/calendar/page.tsx app/dashboard/page.tsx app/globals.css app/login/page.tsx app/services/page.tsx app/settings/page.tsx app/staff/page.tsx components/AppointmentFormModal.tsx components/CustomerFormModal.tsx components/Toast.tsx lib/data.ts)",
+      "Bash(git -C D:/SalonOS commit -m ' *)"
     ]
   }
 }
