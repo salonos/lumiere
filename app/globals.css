@@ -1192,12 +1192,12 @@
 .page-app .main {
   flex: 1;
   min-width: 0;
-  padding: 56px 64px 80px;
-  max-width: 1280px;
-  /* Center the capped content within the remaining flex space so wide
-     screens don't get an empty right-side gap. `margin: 0 auto` on a
-     flex child absorbs free space symmetrically. */
-  margin: 0 auto;
+  /* Larger horizontal padding caps the effective content area at a
+     readable width while letting the main element itself stretch to
+     fill all remaining space beside the sidebar. No max-width and no
+     auto margins, so there's never a weird gap between sidebar and
+     content on wide screens. */
+  padding: 56px clamp(48px, 6vw, 120px) 80px;
   overflow-y: auto;
   overflow-x: hidden;
   height: 100vh;
