@@ -23,6 +23,32 @@ export type Service = {
   commission_rate: number | null; // % credited to staff who performed it
   station_type_id: number | null; // which station this service occupies
   enabled: boolean;
+  // ── Catalogue-extension fields (optional for back-compat with pre-migration rows) ──
+  unit_label?: string | null;         // "per nail" / "per finger" — null = flat price
+  requires_patch_test?: boolean;       // true = warn before booking
+  has_variants?: boolean;              // true = price comes from service_variants
+  allows_addons?: boolean;             // true = service_addons can stack onto bookings
+};
+
+export type ServiceVariant = {
+  id: number;
+  service_id: number;
+  name: string;
+  price: number;
+  duration_override: number | null;
+  sort_order: number;
+  enabled: boolean;
+};
+
+export type ServiceAddon = {
+  id: number;
+  service_id: number;
+  name: string;
+  price: number;
+  unit_label: string | null;
+  duration_added: number;
+  sort_order: number;
+  enabled: boolean;
 };
 
 export const CATEGORY_BLURB: Record<ServiceCategory, string> = {

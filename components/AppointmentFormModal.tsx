@@ -2,25 +2,72 @@
 
 import { useEffect, useRef, useState } from "react";
 import Modal from "./Modal";
-import { humanError } from "@/lib/data";
+import { humanError, lkr } from "@/lib/data";
 import { supabase } from "@/lib/supabase";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type CustomerOption = { id: string; name: string; phone: string | null };
-type ServiceOption  = { id: number; name: string; category: string; duration: number; price: number; station_type_id: number | null };
+
+type ServiceOption  = {
+  id: number;
+  name: string;
+  category: string;
+  duration: number;
+  price: number;
+  station_type_id: number | null;
+  unit_label: string | null;            // "per nail" / "per finger" / null = flat-priced service
+  requires_patch_test: boolean;
+  has_variants: boolean;
+  allows_addons: boolean;
+};
+
 type StaffOption    = { id: number; name: string; role: string | null };
 type StationOption  = { id: number; name: string; count: number };
 
+type Variant = {
+  id: number;
+  service_id: number;
+  name: string;
+  price: number;
+  duration_override: number | null;
+  sort_order: number;
+};
+
+type Addon = {
+  id: number;
+  service_id: number;
+  name: string;
+  price: number;
+  unit_label: string | null;
+  duration_added: number;
+  sort_order: number;
+};
+
+type AddonSelection = {
+  addon_id:       number;
+  name:           string;
+  price:          number;
+  unit_label:     string | null;
+  duration_added: number;
+  quantity:       number;
+  selected:       boolean;
+};
+
 // One service line inside the booking form.
-// Each line carries its own staff assignment for accurate commission tracking.
 // `key` is a local React identifier — never sent to the DB.
 type ServiceLine = {
-  key:        string;
-  service_id: number;
-  duration:   number;
-  price:      number;
-  staff_id:   number | null;  // commission is per-service, so staff is per-line
+  key:            string;
+  service_id:     number;
+  variant_id:     number | null;
+  variant_name:   string | null;
+  variant_price:  number | null;
+  duration:       number;              // effective minutes (variant override or service default)
+  unit_price:     number;              // service.price OR variant.price
+  quantity:       number;              // for unit_label services
+  unit_label:     string | null;       // snapshot for display
+  addons:         AddonSelection[];    // populated when service.allows_addons
+  staff_id:       number | null;       // commission is per-service
 };
 
 type Draft = {
@@ -62,7 +109,19 @@ function newKey(): string {
 }
 
 function blankService(): ServiceLine {
-  return { key: newKey(), service_id: 0, duration: 60, price: 0, staff_id: null };
+  return {
+    key:           newKey(),
+    service_id:    0,
+    variant_id:    null,
+    variant_name:  null,
+    variant_price: null,
+    duration:      60,
+    unit_price:    0,
+    quantity:      1,
+    unit_label:    null,
+    addons:        [],
+    staff_id:      null,
+  };
 }
 
 function blankDraft(defaultCustomerId?: string): Draft {
@@ -73,6 +132,23 @@ function blankDraft(defaultCustomerId?: string): Draft {
     time:        "09:00",
     notes:       "",
   };
+}
+
+/** Total LKR for one service line (unit × quantity + selected addons). */
+function linePrice(line: ServiceLine): number {
+  const base = line.unit_price * line.quantity;
+  const addons = line.addons
+    .filter(a => a.selected && a.quantity > 0)
+    .reduce((sum, a) => sum + a.price * a.quantity, 0);
+  return base + addons;
+}
+
+/** Effective duration including addons that consume calendar time. */
+function lineDuration(line: ServiceLine): number {
+  const addons = line.addons
+    .filter(a => a.selected && a.quantity > 0)
+    .reduce((sum, a) => sum + a.duration_added * a.quantity, 0);
+  return line.duration + addons;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -86,6 +162,8 @@ export default function AppointmentFormModal({
   // Reference data
   const [customers,    setCustomers]    = useState<CustomerOption[]>([]);
   const [services,     setServices]     = useState<ServiceOption[]>([]);
+  const [variants,     setVariants]     = useState<Variant[]>([]);
+  const [addons,       setAddons]       = useState<Addon[]>([]);
   const [staffList,    setStaffList]    = useState<StaffOption[]>([]);
   const [stationTypes, setStationTypes] = useState<StationOption[]>([]);
 
@@ -104,6 +182,9 @@ export default function AppointmentFormModal({
   const [saving,  setSaving]  = useState(false);
   const [error,   setError]   = useState<string | null>(null);
 
+  // Add-on panel open/closed per line key
+  const [addonsOpen, setAddonsOpen] = useState<Record<string, boolean>>({});
+
   // Station availability (one warning string per conflicted service)
   const [stationIssues, setStationIssues] = useState<string[]>([]);
   const [checkingAvail, setCheckingAvail] = useState(false);
@@ -118,8 +199,13 @@ export default function AppointmentFormModal({
 
   // ── Derived totals ─────────────────────────────────────────────────────────
 
-  const totalDuration = draft.services.reduce((s, l) => s + l.duration, 0);
-  const totalPrice    = draft.services.reduce((s, l) => s + l.price, 0);
+  const totalDuration = draft.services.reduce((s, l) => s + lineDuration(l), 0);
+  const totalPrice    = draft.services.reduce((s, l) => s + linePrice(l),    0);
+
+  // Patch-test services in the current draft
+  const patchTestServices = draft.services
+    .map(l => services.find(s => s.id === l.service_id))
+    .filter((s): s is ServiceOption => !!s && s.requires_patch_test);
 
   // ── Load data on open ──────────────────────────────────────────────────────
 
@@ -137,6 +223,7 @@ export default function AppointmentFormModal({
     setNewPhone("");
     setCustomerQuery("");
     setSelectedCustomer(null);
+    setAddonsOpen({});
 
     let cancelled = false;
     Promise.all([
@@ -144,19 +231,42 @@ export default function AppointmentFormModal({
       supabase.from("services").select("*").order("category").order("name"),
       supabase.from("staff").select("id, name, role").eq("active", true).order("name"),
       supabase.from("station_types").select("id, name, count").order("name"),
-    ]).then(([c, s, st, stn]) => {
+      supabase.from("service_variants").select("*").eq("enabled", true).order("sort_order"),
+      supabase.from("service_addons").select("*").eq("enabled", true).order("sort_order"),
+    ]).then(([c, s, st, stn, sv, sa]) => {
       if (cancelled) return;
       setCustomers((c.data as CustomerOption[]) ?? []);
       setServices(
         ((s.data ?? []) as Record<string, unknown>[]).map((r) => ({
-          id:              r.id as number,
-          name:            r.name as string,
-          category:        (r.category as string) ?? "",
-          duration:        (r.duration as number) ?? 60,
-          price:           (r.price as number) ?? 0,
-          station_type_id: (r.station_type_id as number | null) ?? null,
+          id:                  r.id as number,
+          name:                r.name as string,
+          category:            (r.category as string) ?? "",
+          duration:            (r.duration as number) ?? 60,
+          price:               (r.price as number) ?? 0,
+          station_type_id:     (r.station_type_id as number | null) ?? null,
+          unit_label:          (r.unit_label as string | null) ?? null,
+          requires_patch_test: (r.requires_patch_test as boolean) ?? false,
+          has_variants:        (r.has_variants as boolean) ?? false,
+          allows_addons:       (r.allows_addons as boolean) ?? false,
         })),
       );
+      setVariants(((sv.data ?? []) as Record<string, unknown>[]).map(r => ({
+        id:                r.id as number,
+        service_id:        r.service_id as number,
+        name:              r.name as string,
+        price:             (r.price as number) ?? 0,
+        duration_override: (r.duration_override as number | null) ?? null,
+        sort_order:        (r.sort_order as number) ?? 0,
+      })));
+      setAddons(((sa.data ?? []) as Record<string, unknown>[]).map(r => ({
+        id:             r.id as number,
+        service_id:     r.service_id as number,
+        name:           r.name as string,
+        price:          (r.price as number) ?? 0,
+        unit_label:     (r.unit_label as string | null) ?? null,
+        duration_added: (r.duration_added as number) ?? 0,
+        sort_order:     (r.sort_order as number) ?? 0,
+      })));
       setStaffList((st.data as StaffOption[]) ?? []);
       setStationTypes((stn.data as StationOption[]) ?? []);
 
@@ -187,17 +297,121 @@ export default function AppointmentFormModal({
 
   // ── Service line mutations ─────────────────────────────────────────────────
 
+  /** Build a fresh addon-selection list for a given service. */
+  const addonsForService = (serviceId: number): AddonSelection[] => {
+    return addons
+      .filter(a => a.service_id === serviceId)
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .map(a => ({
+        addon_id:       a.id,
+        name:           a.name,
+        price:          a.price,
+        unit_label:     a.unit_label,
+        duration_added: a.duration_added,
+        quantity:       1,
+        selected:       false,
+      }));
+  };
+
   const updateServiceLine = (key: string, serviceId: number) => {
     const svc = services.find(s => s.id === serviceId);
     setDraft(d => ({
       ...d,
       services: d.services.map(line =>
         line.key === key
-          ? { ...line, service_id: serviceId, duration: svc?.duration ?? 60, price: svc?.price ?? 0 }
+          ? {
+              ...line,
+              service_id:    serviceId,
+              variant_id:    null,
+              variant_name:  null,
+              variant_price: null,
+              duration:      svc?.duration ?? 60,
+              unit_price:    svc?.price ?? 0,
+              quantity:      1,
+              unit_label:    svc?.unit_label ?? null,
+              addons:        svc?.allows_addons ? addonsForService(serviceId) : [],
+            }
           : line,
       ),
     }));
     setStationIssues([]);
+    setAddonsOpen(prev => ({ ...prev, [key]: false }));
+  };
+
+  const updateLineVariant = (key: string, variantId: number) => {
+    setDraft(d => ({
+      ...d,
+      services: d.services.map(line => {
+        if (line.key !== key) return line;
+        if (variantId === 0) {
+          // Clear variant — fall back to base service
+          const svc = services.find(s => s.id === line.service_id);
+          return {
+            ...line,
+            variant_id:    null,
+            variant_name:  null,
+            variant_price: null,
+            duration:      svc?.duration ?? line.duration,
+            unit_price:    svc?.price    ?? line.unit_price,
+          };
+        }
+        const v = variants.find(x => x.id === variantId);
+        if (!v) return line;
+        const svc = services.find(s => s.id === line.service_id);
+        return {
+          ...line,
+          variant_id:    v.id,
+          variant_name:  v.name,
+          variant_price: v.price,
+          duration:      v.duration_override ?? svc?.duration ?? line.duration,
+          unit_price:    v.price,
+        };
+      }),
+    }));
+    setStationIssues([]);
+  };
+
+  const updateLineQuantity = (key: string, qty: number) => {
+    const safe = Math.max(1, Math.floor(qty || 1));
+    setDraft(d => ({
+      ...d,
+      services: d.services.map(line =>
+        line.key === key ? { ...line, quantity: safe } : line,
+      ),
+    }));
+  };
+
+  const updateAddonSelected = (lineKey: string, addonId: number, selected: boolean) => {
+    setDraft(d => ({
+      ...d,
+      services: d.services.map(line =>
+        line.key === lineKey
+          ? {
+              ...line,
+              addons: line.addons.map(a =>
+                a.addon_id === addonId ? { ...a, selected } : a,
+              ),
+            }
+          : line,
+      ),
+    }));
+  };
+
+  const updateAddonQuantity = (lineKey: string, addonId: number, qty: number) => {
+    const safe = Math.max(1, Math.floor(qty || 1));
+    setDraft(d => ({
+      ...d,
+      services: d.services.map(line =>
+        line.key === lineKey
+          ? {
+              ...line,
+              addons: line.addons.map(a =>
+                a.addon_id === addonId ? { ...a, quantity: safe } : a,
+              ),
+            }
+          : line,
+      ),
+    }));
   };
 
   const updateServiceStaff = (key: string, staffId: number | null) => {
@@ -225,8 +439,10 @@ export default function AppointmentFormModal({
   // ── Station availability check ─────────────────────────────────────────────
   // Each service checked against its sequential time slot.
 
-  // Stable dep key so the effect only fires when service/date/time actually changes
-  const svcAvailKey = draft.services.map(l => `${l.service_id}:${l.duration}`).join(",");
+  // Stable dep key — fires when service/variant/quantity/addons that affect duration change
+  const svcAvailKey = draft.services
+    .map(l => `${l.service_id}:${lineDuration(l)}`)
+    .join(",");
 
   useEffect(() => {
     const selected = draft.services.filter(l => l.service_id > 0);
@@ -244,7 +460,8 @@ export default function AppointmentFormModal({
 
       for (const line of selected) {
         const svc = services.find(s => s.id === line.service_id);
-        if (!svc?.station_type_id) { cursor += line.duration; continue; }
+        const effDur = lineDuration(line);
+        if (!svc?.station_type_id) { cursor += effDur; continue; }
 
         const station = stationTypes.find(st => st.id === svc.station_type_id);
         const limit   = station?.count ?? 1;
@@ -263,7 +480,7 @@ export default function AppointmentFormModal({
         if (cancelled) return;
 
         const ourStart = cursor;
-        const ourEnd   = cursor + line.duration;
+        const ourEnd   = cursor + effDur;
 
         const conflicts = (existing ?? []).filter(a => {
           const s = timeToMins(a.time as string);
@@ -276,7 +493,7 @@ export default function AppointmentFormModal({
             `All ${limit} ${station?.name ?? "station"}${limit > 1 ? "s" : ""} occupied for "${svc.name}".`,
           );
         }
-        cursor += line.duration;
+        cursor += effDur;
       }
 
       if (!cancelled) { setStationIssues(issues); setCheckingAvail(false); }
@@ -288,7 +505,9 @@ export default function AppointmentFormModal({
 
   // ── Per-service staff conflict check ──────────────────────────────────────
 
-  const staffDepsKey = draft.services.map(l => `${l.staff_id ?? "x"}:${l.duration}`).join(",");
+  const staffDepsKey = draft.services
+    .map(l => `${l.staff_id ?? "x"}:${lineDuration(l)}`)
+    .join(",");
 
   useEffect(() => {
     const linesWithStaff = draft.services.filter(l => l.staff_id != null);
@@ -305,8 +524,9 @@ export default function AppointmentFormModal({
       let cursor = timeToMins(draft.time);
 
       for (const line of draft.services) {
+        const effDur = lineDuration(line);
         const ourStart = cursor;
-        const ourEnd   = cursor + line.duration;
+        const ourEnd   = cursor + effDur;
 
         if (line.staff_id != null) {
           const { data } = await supabase
@@ -333,7 +553,7 @@ export default function AppointmentFormModal({
             );
           }
         }
-        cursor += line.duration;
+        cursor += effDur;
       }
 
       if (!cancelled) { setStaffIssues(issues); setCheckingStaff(false); }
@@ -425,7 +645,13 @@ export default function AppointmentFormModal({
 
   const servicesReady =
     draft.services.length > 0 &&
-    draft.services.every(l => l.service_id > 0);
+    draft.services.every(l => {
+      if (l.service_id <= 0) return false;
+      const svc = services.find(s => s.id === l.service_id);
+      // If variants are required, a variant must be picked
+      if (svc?.has_variants && l.variant_id == null) return false;
+      return true;
+    });
 
   const valid =
     customerReady &&
@@ -434,8 +660,8 @@ export default function AppointmentFormModal({
     draft.time.length > 0;
 
   // ── Submit ─────────────────────────────────────────────────────────────────
-  // Creates one appointment row per service with sequential start times.
-  // Each row carries its own staff_id for commission tracking.
+  // Inserts one appointment per service line with sequential start times.
+  // After insert, writes appointment_addons rows for any selected modifiers.
 
   const submit = async () => {
     setTouched(true);
@@ -460,30 +686,93 @@ export default function AppointmentFormModal({
       customerId = (newCust as { id: string }).id;
     }
 
-    const rows: Record<string, unknown>[] = [];
-    let cursor = timeToMins(draft.time);
+    // Build appointment rows + remember each line's selected add-ons keyed by row.time
+    type RowInput = {
+      customer_id: string;
+      service_id:  number;
+      date:        string;
+      time:        string;
+      duration:    number;
+      status:      string;
+      notes:       string | null;
+      staff_id:    number | null;
+      quantity:    number;
+      unit_label:  string | null;
+      variant_id:  number | null;
+      variant_name:  string | null;
+      variant_price: number | null;
+    };
+    const rows: RowInput[] = [];
+    const addonsByTime = new Map<string, AddonSelection[]>();
 
+    let cursor = timeToMins(draft.time);
     for (const line of draft.services) {
+      const effDur = lineDuration(line);
+      const t      = minsToTime(cursor);
       rows.push({
-        customer_id: customerId,
-        service_id:  line.service_id,
-        date:        draft.date,
-        time:        minsToTime(cursor),
-        duration:    line.duration,
-        status:      "confirmed",
-        notes:       draft.notes.trim() || null,
-        staff_id:    line.staff_id,
+        customer_id:   customerId,
+        service_id:    line.service_id,
+        date:          draft.date,
+        time:          t,
+        duration:      effDur,
+        status:        "confirmed",
+        notes:         draft.notes.trim() || null,
+        staff_id:      line.staff_id,
+        quantity:      line.quantity,
+        unit_label:    line.unit_label,
+        variant_id:    line.variant_id,
+        variant_name:  line.variant_name,
+        variant_price: line.variant_price,
       });
-      cursor += line.duration;
+      addonsByTime.set(t, line.addons.filter(a => a.selected && a.quantity > 0));
+      cursor += effDur;
     }
 
-    const { error: err } = await supabase.from("appointments").insert(rows);
+    const { data: created, error: insErr } = await supabase
+      .from("appointments")
+      .insert(rows)
+      .select("id, time");
 
-    setSaving(false);
-    if (err) {
-      setError(humanError(err, "We couldn't save this appointment. Try again in a moment."));
+    if (insErr) {
+      setSaving(false);
+      setError(humanError(insErr, "We couldn't save this appointment. Try again in a moment."));
       return;
     }
+
+    // Insert add-ons keyed by the time each appointment row landed on
+    const addonRows: Record<string, unknown>[] = [];
+    for (const r of (created ?? []) as { id: number; time: string }[]) {
+      const t   = (r.time as string).slice(0, 5);
+      const sel = addonsByTime.get(t) ?? [];
+      for (const a of sel) {
+        addonRows.push({
+          appointment_id: r.id,
+          addon_id:       a.addon_id,
+          name:           a.name,
+          price:          a.price,
+          quantity:       a.quantity,
+          unit_label:     a.unit_label,
+        });
+      }
+    }
+
+    if (addonRows.length > 0) {
+      const { error: addonErr } = await supabase
+        .from("appointment_addons")
+        .insert(addonRows);
+      if (addonErr) {
+        // The appointments saved; add-ons didn't. Tell the user without rolling back.
+        setSaving(false);
+        setError(humanError(
+          addonErr,
+          "Appointment saved but we couldn't attach some add-ons. Reopen the appointment to retry.",
+        ));
+        onSave();
+        return;
+      }
+    }
+
+    setSaving(false);
     onSave();
     onClose();
   };
@@ -713,13 +1002,22 @@ export default function AppointmentFormModal({
 
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {draft.services.map((line, idx) => {
-              const selectedSvc   = services.find(s => s.id === line.service_id);
-              const selectedStnId = selectedSvc?.station_type_id;
+              const selectedSvc      = services.find(s => s.id === line.service_id);
+              const selectedStnId    = selectedSvc?.station_type_id;
+              const lineVariants     = selectedSvc?.has_variants
+                ? variants.filter(v => v.service_id === selectedSvc.id)
+                : [];
+              const lineAddonsList   = line.addons;
+              const linePanelOpen    = !!addonsOpen[line.key];
+              const selectedAddonCount = lineAddonsList.filter(a => a.selected).length;
 
               // Sequential start time for this service
               const lineStartMins = timeToMins(draft.time) +
-                draft.services.slice(0, idx).reduce((s, l) => s + l.duration, 0);
+                draft.services.slice(0, idx).reduce((s, l) => s + lineDuration(l), 0);
               const lineStartLabel = (idx > 0 && draft.time) ? minsToTime(lineStartMins) : null;
+
+              const effPrice = linePrice(line);
+              const effDur   = lineDuration(line);
 
               return (
                 <div
@@ -760,19 +1058,166 @@ export default function AppointmentFormModal({
                         <optgroup key={cat} label={cat}>
                           {services.filter(s => s.category === cat).map(s => (
                             <option key={s.id} value={s.id}>
-                              {s.name} · {s.duration} min{s.price ? ` · LKR ${s.price.toLocaleString()}` : ""}
+                              {s.name}
+                              {s.has_variants ? " · choose tier" : ""}
+                              {!s.has_variants && s.duration ? ` · ${s.duration} min` : ""}
+                              {!s.has_variants && s.price ? ` · LKR ${s.price.toLocaleString()}${s.unit_label ? ` ${s.unit_label}` : ""}` : ""}
                             </option>
                           ))}
                         </optgroup>
                       ))}
                     </select>
 
-                    {selectedStnId != null && (
-                      <div style={{ marginTop: 4, fontSize: 12, color: "var(--ink-500)", letterSpacing: "0.02em" }}>
-                        Uses:{" "}
-                        <strong style={{ color: "var(--ink-700)", fontWeight: 500 }}>
-                          {stationTypes.find(st => st.id === selectedStnId)?.name ?? "station"}
-                        </strong>
+                    {/* Variant picker (if has_variants) */}
+                    {selectedSvc?.has_variants && lineVariants.length > 0 && (
+                      <div style={{ marginTop: 8 }}>
+                        <div style={{
+                          fontSize: 10,
+                          letterSpacing: "0.06em",
+                          textTransform: "uppercase",
+                          color: "var(--ink-400)",
+                          marginBottom: 4,
+                        }}>
+                          Tier <span style={{ color: "#A53A2C" }}>*</span>
+                        </div>
+                        <select
+                          value={line.variant_id ?? ""}
+                          onChange={(e) => updateLineVariant(line.key, Number(e.target.value))}
+                          style={{ fontSize: 13 }}
+                        >
+                          <option value="">Pick a tier…</option>
+                          {lineVariants.map(v => (
+                            <option key={v.id} value={v.id}>
+                              {v.name} · LKR {v.price.toLocaleString()}
+                              {v.duration_override ? ` · ${v.duration_override} min` : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    {/* Quantity input (if unit_label) */}
+                    {line.unit_label && (
+                      <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}>
+                        <div style={{
+                          fontSize: 10,
+                          letterSpacing: "0.06em",
+                          textTransform: "uppercase",
+                          color: "var(--ink-400)",
+                        }}>
+                          How many <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--ink-500)" }}>
+                            ({line.unit_label})
+                          </span>
+                        </div>
+                        <input
+                          type="number"
+                          min={1}
+                          step={1}
+                          value={line.quantity}
+                          onChange={(e) => updateLineQuantity(line.key, Number(e.target.value))}
+                          style={{ width: 72, padding: "6px 10px", fontSize: 13, textAlign: "center" }}
+                        />
+                        <div style={{ fontSize: 12, color: "var(--ink-500)" }}>
+                          × LKR {line.unit_price.toLocaleString()}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Station + duration + price summary */}
+                    <div style={{ marginTop: 6, fontSize: 12, color: "var(--ink-500)", display: "flex", flexWrap: "wrap", gap: 12 }}>
+                      {selectedStnId != null && (
+                        <span>
+                          Uses:{" "}
+                          <strong style={{ color: "var(--ink-700)", fontWeight: 500 }}>
+                            {stationTypes.find(st => st.id === selectedStnId)?.name ?? "station"}
+                          </strong>
+                        </span>
+                      )}
+                      {line.service_id > 0 && (
+                        <span>
+                          {effDur} min · <strong style={{ color: "var(--ink-700)", fontWeight: 500 }}>{lkr(effPrice)}</strong>
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Add-ons (if allows_addons and we have addons) */}
+                    {selectedSvc?.allows_addons && lineAddonsList.length > 0 && (
+                      <div style={{ marginTop: 10 }}>
+                        <button
+                          type="button"
+                          onClick={() => setAddonsOpen(prev => ({ ...prev, [line.key]: !linePanelOpen }))}
+                          style={{
+                            display: "flex", alignItems: "center", justifyContent: "space-between",
+                            width: "100%",
+                            padding: "8px 12px",
+                            background: linePanelOpen ? "var(--plum-50)" : "var(--white)",
+                            border: "1px solid var(--ink-100)",
+                            borderRadius: 8,
+                            cursor: "pointer",
+                            fontFamily: "inherit",
+                            fontSize: 12,
+                            color: "var(--plum-700)",
+                            fontWeight: 500,
+                          }}
+                        >
+                          <span>
+                            {linePanelOpen ? "▾" : "▸"}{" "}
+                            Add extras
+                            {selectedAddonCount > 0 ? ` (${selectedAddonCount} selected)` : ""}
+                          </span>
+                          <span style={{ color: "var(--ink-400)", fontWeight: 400 }}>
+                            {lineAddonsList.length} available
+                          </span>
+                        </button>
+
+                        {linePanelOpen && (
+                          <div style={{
+                            marginTop: 6,
+                            padding: "8px 4px",
+                            background: "var(--white)",
+                            border: "1px solid var(--ink-100)",
+                            borderRadius: 8,
+                            display: "flex", flexDirection: "column", gap: 4,
+                          }}>
+                            {lineAddonsList.map(a => (
+                              <label
+                                key={a.addon_id}
+                                style={{
+                                  display: "flex", alignItems: "center", gap: 10,
+                                  padding: "6px 10px",
+                                  borderRadius: 6,
+                                  cursor: "pointer",
+                                  background: a.selected ? "var(--plum-50)" : "transparent",
+                                }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={a.selected}
+                                  onChange={(e) => updateAddonSelected(line.key, a.addon_id, e.target.checked)}
+                                  style={{ accentColor: "var(--plum-600)" }}
+                                />
+                                <span style={{ flex: 1, fontSize: 12, color: "var(--ink-900)" }}>
+                                  {a.name}
+                                  <span style={{ color: "var(--ink-400)", fontWeight: 400 }}>
+                                    {"  ·  LKR "}{a.price.toLocaleString()}
+                                    {a.unit_label ? ` ${a.unit_label}` : ""}
+                                  </span>
+                                </span>
+                                {a.selected && a.unit_label && (
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    step={1}
+                                    value={a.quantity}
+                                    onClick={(e) => e.stopPropagation()}
+                                    onChange={(e) => updateAddonQuantity(line.key, a.addon_id, Number(e.target.value))}
+                                    style={{ width: 60, padding: "4px 8px", fontSize: 12, textAlign: "center" }}
+                                  />
+                                )}
+                              </label>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -862,10 +1307,36 @@ export default function AppointmentFormModal({
 
           {touched && !servicesReady && (
             <div style={{ marginTop: 8, fontSize: 12, color: "#A53A2C" }}>
-              Please select a service for each row, or remove empty rows.
+              {draft.services.some(l => {
+                const svc = services.find(s => s.id === l.service_id);
+                return svc?.has_variants && l.variant_id == null;
+              })
+                ? "Please pick a tier for every service that needs one."
+                : "Please select a service for each row, or remove empty rows."}
             </div>
           )}
         </div>
+
+        {/* Patch-test warning */}
+        {patchTestServices.length > 0 && (
+          <div style={{
+            marginTop: -4, marginBottom: 16,
+            padding: "12px 14px",
+            background: "#FFF8E1",
+            border: "1px solid #F5C66B",
+            borderRadius: 10,
+            fontSize: 12,
+            color: "#7A5A1A",
+            lineHeight: 1.55,
+          }}>
+            <strong style={{ fontWeight: 600 }}>Patch test required.</strong>{" "}
+            {patchTestServices.length === 1
+              ? <>&ldquo;{patchTestServices[0].name}&rdquo; needs</>
+              : <>{patchTestServices.length} services need</>}{" "}
+            a patch test 24 hours before this appointment. Confirm with the customer
+            whether they&rsquo;ve had one recently, or schedule a separate patch-test slot.
+          </div>
+        )}
 
         {/* Total summary */}
         {filledServices.length > 0 && (

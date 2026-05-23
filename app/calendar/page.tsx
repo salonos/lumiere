@@ -17,6 +17,14 @@ import { supabase } from "@/lib/supabase";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
+type AptAddon = {
+  id: number;
+  name: string;
+  price: number;
+  quantity: number;
+  unit_label: string | null;
+};
+
 type CalApt = {
   id: number;
   date: string;
@@ -33,6 +41,15 @@ type CalApt = {
   staffName: string | null;
   paymentMethod: string | null;
   discountAmount: number;
+  // ── Catalogue-extension snapshots ──
+  quantity: number;
+  unitLabel: string | null;
+  variantId: number | null;
+  variantName: string | null;
+  variantPrice: number | null;
+  addons: AptAddon[];
+  // Computed: (variantPrice ?? servicePrice) × quantity + sum(addons.price × quantity)
+  effectivePrice: number;
 };
 
 type ViewType = "dayGridMonth" | "timeGridWeek" | "timeGridDay";
@@ -607,23 +624,65 @@ export default function CalendarPage() {
     }
 
     const rows = (data ?? []) as Record<string, unknown>[];
-    setApts(rows.map((r) => ({
-      id:             r.id as number,
-      date:           r.date as string,
-      time:           ((r.time as string) ?? "00:00").slice(0, 5),
-      duration:       (r.duration as number) ?? 60,
-      status:         r.status as string,
-      notes:          (r.notes as string | null) ?? null,
-      tint:           (r.tint as string | null) ?? null,
-      customerName:   (r.customers as { name?: string } | null)?.name ?? "Customer",
-      customerId:     (r.customer_id as string) ?? "",
-      serviceName:    (r.services as { name?: string } | null)?.name ?? "Service",
-      servicePrice:   (r.services as { price?: number } | null)?.price ?? 0,
-      staffId:        (r.staff_id as number | null) ?? null,
-      staffName:      (r.staff as { name?: string } | null)?.name ?? null,
-      paymentMethod:  (r.payment_method as string | null) ?? null,
-      discountAmount: (r.discount_amount as number) ?? 0,
-    })));
+
+    // Pull add-ons for the visible appointments in one query
+    const ids = rows.map((r) => r.id as number);
+    let addonsByApt = new Map<number, AptAddon[]>();
+    if (ids.length > 0) {
+      const { data: addonRows } = await supabase
+        .from("appointment_addons")
+        .select("id, appointment_id, name, price, quantity, unit_label")
+        .in("appointment_id", ids);
+      if (addonRows) {
+        for (const a of addonRows as Record<string, unknown>[]) {
+          const apId = a.appointment_id as number;
+          const list = addonsByApt.get(apId) ?? [];
+          list.push({
+            id:         a.id as number,
+            name:       a.name as string,
+            price:      (a.price as number) ?? 0,
+            quantity:   (a.quantity as number) ?? 1,
+            unit_label: (a.unit_label as string | null) ?? null,
+          });
+          addonsByApt.set(apId, list);
+        }
+      }
+    }
+
+    setApts(rows.map((r) => {
+      const id            = r.id as number;
+      const servicePrice  = (r.services as { price?: number } | null)?.price ?? 0;
+      const quantity      = (r.quantity as number) ?? 1;
+      const variantPrice  = (r.variant_price as number | null) ?? null;
+      const addons        = addonsByApt.get(id) ?? [];
+      const unitPrice     = variantPrice ?? servicePrice;
+      const addonsTotal   = addons.reduce((s, a) => s + a.price * a.quantity, 0);
+      const effectivePrice = unitPrice * quantity + addonsTotal;
+      return {
+        id,
+        date:           r.date as string,
+        time:           ((r.time as string) ?? "00:00").slice(0, 5),
+        duration:       (r.duration as number) ?? 60,
+        status:         r.status as string,
+        notes:          (r.notes as string | null) ?? null,
+        tint:           (r.tint as string | null) ?? null,
+        customerName:   (r.customers as { name?: string } | null)?.name ?? "Customer",
+        customerId:     (r.customer_id as string) ?? "",
+        serviceName:    (r.services as { name?: string } | null)?.name ?? "Service",
+        servicePrice,
+        staffId:        (r.staff_id as number | null) ?? null,
+        staffName:      (r.staff as { name?: string } | null)?.name ?? null,
+        paymentMethod:  (r.payment_method as string | null) ?? null,
+        discountAmount: (r.discount_amount as number) ?? 0,
+        quantity,
+        unitLabel:      (r.unit_label as string | null) ?? null,
+        variantId:      (r.variant_id as number | null) ?? null,
+        variantName:    (r.variant_name as string | null) ?? null,
+        variantPrice,
+        addons,
+        effectivePrice,
+      };
+    }));
     setAptsLoading(false);
   }, []);
 
@@ -821,10 +880,17 @@ export default function CalendarPage() {
         .single();
 
       if (cust) {
+        // Use effectivePrice (variant + addons + quantity) net of discount,
+        // not the raw service price — otherwise total_spend ignores everything
+        // the customer actually paid for tiers and add-ons.
+        const netPaid = Math.max(
+          0,
+          apt.effectivePrice - (payment?.discount ?? 0),
+        );
         await supabase.from("customers").update({
           visits:          ((cust as { visits?: number }).visits ?? 0) + 1,
           total_spend:
-            ((cust as { total_spend?: number }).total_spend ?? 0) + apt.servicePrice,
+            ((cust as { total_spend?: number }).total_spend ?? 0) + netPaid,
           last_visit_date: apt.date,
         }).eq("id", apt.customerId);
       }
@@ -1025,6 +1091,12 @@ export default function CalendarPage() {
           staffName:      detailApt.staffName,
           paymentMethod:  detailApt.paymentMethod,
           discountAmount: detailApt.discountAmount,
+          quantity:       detailApt.quantity,
+          unitLabel:      detailApt.unitLabel,
+          variantName:    detailApt.variantName,
+          variantPrice:   detailApt.variantPrice,
+          addons:         detailApt.addons,
+          effectivePrice: detailApt.effectivePrice,
         } : null}
         rescheduleDate={rescheduleDate}
         rescheduleTime={rescheduleTime}

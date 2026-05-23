@@ -115,61 +115,132 @@ export default function ServicesPage() {
     setFormOpen(true);
   };
 
+  /** Replace the variants and addons of a service with the draft's lists.
+   *  We do a wipe-and-insert rather than diffing — far simpler, and these
+   *  lists are short.  Existing appointments don't reference these rows
+   *  (they snapshot name/price), so deleting variants/addons is safe. */
+  const syncVariantsAndAddons = async (
+    serviceId: number,
+    draft: ServiceDraft,
+  ): Promise<string | null> => {
+    // ── Variants ──
+    if (draft.has_variants) {
+      const { error: delErr } = await supabase
+        .from("service_variants").delete().eq("service_id", serviceId);
+      if (delErr) return humanError(delErr, "Couldn't refresh tier prices.");
+      if (draft.variants.length > 0) {
+        const rows = draft.variants.map((v, idx) => ({
+          service_id:        serviceId,
+          name:              v.name.trim(),
+          price:             v.price,
+          duration_override: v.duration_override,
+          sort_order:        idx,
+          enabled:           true,
+        }));
+        const { error: insErr } = await supabase.from("service_variants").insert(rows);
+        if (insErr) return humanError(insErr, "Couldn't save tier prices.");
+      }
+    } else {
+      // Flag turned off — clear any leftover rows.
+      await supabase.from("service_variants").delete().eq("service_id", serviceId);
+    }
+
+    // ── Addons ──
+    if (draft.allows_addons) {
+      const { error: delErr } = await supabase
+        .from("service_addons").delete().eq("service_id", serviceId);
+      if (delErr) return humanError(delErr, "Couldn't refresh extras.");
+      if (draft.addons.length > 0) {
+        const rows = draft.addons.map((a, idx) => ({
+          service_id:     serviceId,
+          name:           a.name.trim(),
+          price:          a.price,
+          unit_label:     a.unit_label,
+          duration_added: a.duration_added,
+          sort_order:     idx,
+          enabled:        true,
+        }));
+        const { error: insErr } = await supabase.from("service_addons").insert(rows);
+        if (insErr) return humanError(insErr, "Couldn't save extras.");
+      }
+    } else {
+      await supabase.from("service_addons").delete().eq("service_id", serviceId);
+    }
+
+    return null;
+  };
+
   const handleSave = async (draft: ServiceDraft, id?: number) => {
+    const servicePayload = {
+      name:                draft.name,
+      category:            draft.category,
+      description:         draft.description,
+      duration:            draft.duration,
+      price:               draft.price,
+      commission_rate:     draft.commission_rate === "" ? null : draft.commission_rate,
+      station_type_id:     draft.station_type_id ?? null,
+      enabled:             draft.enabled,
+      unit_label:          draft.unit_label,
+      requires_patch_test: draft.requires_patch_test,
+      has_variants:        draft.has_variants,
+      allows_addons:       draft.allows_addons,
+    };
+
     if (id !== undefined) {
       // ── Edit existing ──
       const { error } = await supabase
         .from("services")
-        .update({
-          name:            draft.name,
-          category:        draft.category,
-          description:     draft.description,
-          duration:        draft.duration,
-          price:           draft.price,
-          commission_rate: draft.commission_rate === "" ? null : draft.commission_rate,
-          station_type_id: draft.station_type_id ?? null,
-          enabled:         draft.enabled,
-        })
+        .update(servicePayload)
         .eq("id", id);
 
       if (error) {
         showError(humanError(error, "We couldn't save those changes. Try again in a moment."));
-      } else {
-        setItems((prev) =>
-          prev.map((s) =>
-            s.id === id
-              ? { ...s, ...draft, commission_rate: draft.commission_rate === "" ? null : draft.commission_rate }
-              : s,
-          ),
-        );
-        showSuccess(`"${draft.name}" updated`);
+        return;
       }
+
+      const syncErr = await syncVariantsAndAddons(id, draft);
+      if (syncErr) {
+        showError(syncErr);
+        return;
+      }
+
+      setItems((prev) =>
+        prev.map((s) =>
+          s.id === id
+            ? {
+                ...s,
+                ...servicePayload,
+                commission_rate: draft.commission_rate === "" ? null : draft.commission_rate,
+              }
+            : s,
+        ),
+      );
+      showSuccess(`"${draft.name}" updated`);
     } else {
       // ── Add new ──
       const { data: created, error } = await supabase
         .from("services")
-        .insert({
-          name:            draft.name,
-          category:        draft.category,
-          description:     draft.description,
-          duration:        draft.duration,
-          price:           draft.price,
-          commission_rate: draft.commission_rate === "" ? null : draft.commission_rate,
-          station_type_id: draft.station_type_id ?? null,
-          enabled:         draft.enabled,
-        })
+        .insert(servicePayload)
         .select()
         .single();
 
-      if (error) {
+      if (error || !created) {
         showError(humanError(error, `We couldn't add "${draft.name}". Try again in a moment.`));
-      } else if (created) {
-        setItems((prev) => [
-          ...prev,
-          { ...created, description: (created as Service).description ?? "" } as Service,
-        ]);
-        showSuccess(`"${draft.name}" added to your menu`);
+        return;
       }
+
+      const newId = (created as Service).id;
+      const syncErr = await syncVariantsAndAddons(newId, draft);
+      if (syncErr) {
+        showError(syncErr);
+        return;
+      }
+
+      setItems((prev) => [
+        ...prev,
+        { ...created, description: (created as Service).description ?? "" } as Service,
+      ]);
+      showSuccess(`"${draft.name}" added to your menu`);
     }
   };
 
@@ -284,17 +355,38 @@ export default function ServicesPage() {
                             </div>
                           </div>
                           <div style={{ textAlign: "right" }}>
-                            <div className="svc-price">{lkr(s.price)}</div>
+                            <div className="svc-price">
+                              {s.has_variants
+                                ? <span style={{ fontSize: 13, fontWeight: 500, color: "var(--ink-500)" }}>Tiered</span>
+                                : lkr(s.price)}
+                            </div>
+                            {!s.has_variants && s.unit_label && (
+                              <div style={{ fontSize: 11, color: "var(--ink-400)", letterSpacing: "0.02em", marginTop: 2 }}>
+                                {s.unit_label}
+                              </div>
+                            )}
                             {s.commission_rate != null && (
-                              <div
-                                style={{
-                                  fontSize: 11,
-                                  color: "var(--ink-400)",
-                                  letterSpacing: "0.04em",
-                                  marginTop: 2,
-                                }}
-                              >
+                              <div style={{ fontSize: 11, color: "var(--ink-400)", letterSpacing: "0.04em", marginTop: 2 }}>
                                 {s.commission_rate}% commission
+                              </div>
+                            )}
+                            {(s.has_variants || s.allows_addons || s.requires_patch_test) && (
+                              <div style={{ marginTop: 6, display: "flex", gap: 4, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                                {s.has_variants && (
+                                  <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "var(--plum-50)", color: "var(--plum-700)", letterSpacing: "0.04em" }}>
+                                    TIERED
+                                  </span>
+                                )}
+                                {s.allows_addons && (
+                                  <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "var(--champagne-100)", color: "var(--champagne-700)", letterSpacing: "0.04em" }}>
+                                    EXTRAS
+                                  </span>
+                                )}
+                                {s.requires_patch_test && (
+                                  <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "#FFF8E1", color: "#7A5A1A", letterSpacing: "0.04em" }}>
+                                    PATCH TEST
+                                  </span>
+                                )}
                               </div>
                             )}
                           </div>

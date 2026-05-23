@@ -13,6 +13,14 @@ const DOW = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "
 
 type StaffOption = { id: number; name: string; role: string | null };
 
+type AptAddon = {
+  id: number;
+  name: string;
+  price: number;
+  quantity: number;
+  unit_label: string | null;
+};
+
 type Props = {
   open: boolean;
   onClose: () => void;
@@ -31,6 +39,13 @@ type Props = {
     staffName: string | null;
     paymentMethod: string | null;
     discountAmount: number;
+    // ── Catalogue-extension fields (all optional for back-compat) ──
+    quantity?: number;
+    unitLabel?: string | null;
+    variantName?: string | null;
+    variantPrice?: number | null;
+    addons?: AptAddon[];
+    effectivePrice?: number;  // (variantPrice ?? servicePrice) × qty + addons
   } | null;
   // Reschedule
   rescheduleDate: string;
@@ -111,7 +126,18 @@ export default function AppointmentDetailModal({
   const currentStaffId  = apt.staffId ?? null;
   const reassignChanged = reassignStaffId !== currentStaffId;
 
-  const netAmount = Math.max(0, apt.servicePrice - (paymentStep ? discount : apt.discountAmount));
+  // ── Catalogue-extension snapshot reads ────────────────────────────────────
+  const qty           = apt.quantity ?? 1;
+  const unitLabel     = apt.unitLabel ?? null;
+  const variantName   = apt.variantName ?? null;
+  const variantPrice  = apt.variantPrice ?? null;
+  const addons        = apt.addons ?? [];
+  const unitPrice     = variantPrice ?? apt.servicePrice;
+  const baseLine      = unitPrice * qty;
+  const addonsTotal   = addons.reduce((s, a) => s + a.price * a.quantity, 0);
+  const grossAmount   = apt.effectivePrice ?? (baseLine + addonsTotal);
+
+  const netAmount = Math.max(0, grossAmount - (paymentStep ? discount : apt.discountAmount));
 
   // ── Payment step ──────────────────────────────────────────────────────────
 
@@ -240,7 +266,11 @@ export default function AppointmentDetailModal({
       }
       eyebrow="Appointment"
       title={apt.customerName}
-      subtitle={`${apt.serviceName} · ${apt.duration} min`}
+      subtitle={
+        variantName
+          ? `${apt.serviceName} · ${variantName} · ${apt.duration} min`
+          : `${apt.serviceName} · ${apt.duration} min`
+      }
       footer={footer}
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
@@ -265,7 +295,8 @@ export default function AppointmentDetailModal({
               Cancel this appointment?
             </div>
             <div style={{ fontSize: 13, color: "#7F1D1D", lineHeight: 1.65 }}>
-              <strong>{apt.customerName}</strong>&rsquo;s {apt.serviceName} on{" "}
+              <strong>{apt.customerName}</strong>&rsquo;s {apt.serviceName}
+              {variantName && <> ({variantName})</>} on{" "}
               {dateLabel} at {formatTime12(apt.time)} will be marked as cancelled.
               This cannot be undone.
             </div>
@@ -372,7 +403,7 @@ export default function AppointmentDetailModal({
               borderTop: "1px solid var(--ink-100)",
             }}>
               <div style={{ fontSize: 12, color: "var(--ink-500)" }}>
-                {lkr(apt.servicePrice)}
+                {lkr(grossAmount)}
                 {discount > 0 && ` − ${lkr(discount)} discount`}
               </div>
               <div style={{ fontSize: 17, fontWeight: 600, color: "var(--ink-900)" }}>
@@ -410,6 +441,76 @@ export default function AppointmentDetailModal({
               </div>
             )}
 
+            {/* ── Service breakdown — variant / quantity / add-ons ── */}
+            {(variantName || qty > 1 || addons.length > 0) && (
+              <div>
+                <div style={labelStyle}>Breakdown</div>
+                <div style={{
+                  marginTop: 6,
+                  background: "var(--cream)",
+                  borderRadius: 10,
+                  padding: "12px 14px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 6,
+                  fontSize: 13,
+                }}>
+                  {/* Base line */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                    <span style={{ color: "var(--ink-700)" }}>
+                      {apt.serviceName}
+                      {variantName && (
+                        <span style={{ color: "var(--ink-500)" }}>{" · "}{variantName}</span>
+                      )}
+                      {qty > 1 && unitLabel && (
+                        <span style={{ color: "var(--ink-500)" }}>{` · ${qty} ${unitLabel}`}</span>
+                      )}
+                    </span>
+                    <span style={{ color: "var(--ink-900)", fontWeight: 500 }}>
+                      {lkr(baseLine)}
+                    </span>
+                  </div>
+
+                  {/* Add-ons */}
+                  {addons.map((a) => (
+                    <div key={a.id} style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "baseline",
+                      paddingLeft: 8,
+                    }}>
+                      <span style={{ color: "var(--ink-600)", fontSize: 12 }}>
+                        + {a.name}
+                        {a.quantity > 1 && a.unit_label && (
+                          <span style={{ color: "var(--ink-400)" }}>{` · ${a.quantity} ${a.unit_label}`}</span>
+                        )}
+                      </span>
+                      <span style={{ color: "var(--ink-700)", fontSize: 12, fontWeight: 500 }}>
+                        {lkr(a.price * a.quantity)}
+                      </span>
+                    </div>
+                  ))}
+
+                  {/* Subtotal — only show when there's more than one line */}
+                  {(addons.length > 0 || qty > 1) && (
+                    <div style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "baseline",
+                      paddingTop: 6,
+                      borderTop: "1px solid var(--ink-100)",
+                      marginTop: 2,
+                    }}>
+                      <span style={{ color: "var(--ink-700)", fontWeight: 500 }}>Subtotal</span>
+                      <span style={{ color: "var(--ink-900)", fontWeight: 600 }}>
+                        {lkr(grossAmount)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Payment info (completed) */}
             {apt.status === "completed" && (paymentLabel || apt.discountAmount > 0) && (
               <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
@@ -422,7 +523,7 @@ export default function AppointmentDetailModal({
                 <div>
                   <div style={labelStyle}>Amount received</div>
                   <div style={valueStyle}>
-                    {lkr(Math.max(0, apt.servicePrice - apt.discountAmount))}
+                    {lkr(Math.max(0, grossAmount - apt.discountAmount))}
                     {apt.discountAmount > 0 && (
                       <span style={{ fontSize: 12, color: "var(--ink-400)", fontWeight: 400, marginLeft: 6 }}>
                         ({lkr(apt.discountAmount)} off)
