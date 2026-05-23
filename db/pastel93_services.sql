@@ -13,8 +13,11 @@
 -- ── PREREQUISITES ────────────────────────────────────────────────────────────
 --   1. Run db/services_extensions.sql first (adds the columns/tables).
 --   2. Run db/pastel93_setup.sql first (creates the salon).
---   3. Be signed in as the Pastel 93 owner before running, so RLS lets the
---      inserts through.
+--
+--   Note: the SQL Editor runs as the postgres role with auth.uid() = null,
+--   so current_salon_id() returns null and the table defaults cannot fill
+--   salon_id automatically. Every insert below passes salon_id explicitly
+--   (via v_sid) for that reason.
 --
 -- ── HOW TO USE ───────────────────────────────────────────────────────────────
 --   Supabase Dashboard → SQL Editor → New query → paste this file → Run
@@ -84,8 +87,8 @@ begin
      90, 4500, 12, v_nail_station, true, true);
 
   -- Manicure add-ons (shared list — Rs 2000 for gel colour application)
-  insert into public.service_addons (service_id, name, price, unit_label, duration_added, sort_order)
-  select s.id, x.name, x.price, x.unit_label, x.duration_added, x.sort_order
+  insert into public.service_addons (salon_id, service_id, name, price, unit_label, duration_added, sort_order)
+  select v_sid, s.id, x.name, x.price, x.unit_label, x.duration_added, x.sort_order
     from public.services s,
          (values
            ('Soak of gel colour',     1000, null::text,   10, 0),
@@ -118,8 +121,8 @@ begin
      'Nail trimming, shaping, cuticle care, soak, jelly soak, dead skin removal, moisturising scrub, deep hydration foot mask, massaging cream with hand, wooden & electric massager, lotion, regular nail polish. (90 mins)',
      90, 5500, 12, v_pedi_station, true, true);
 
-  insert into public.service_addons (service_id, name, price, unit_label, duration_added, sort_order)
-  select s.id, x.name, x.price, x.unit_label, x.duration_added, x.sort_order
+  insert into public.service_addons (salon_id, service_id, name, price, unit_label, duration_added, sort_order)
+  select v_sid, s.id, x.name, x.price, x.unit_label, x.duration_added, x.sort_order
     from public.services s,
          (values
            ('Soak of gel colour',     1000, null::text,   10, 0),
@@ -155,8 +158,8 @@ begin
 
   -- Nail enhancement add-ons (the page 3 list — French / nail art / etc, but applied as extras
   -- on top of an enhancement service, and a few standalone extras like rhinestone & 2-3 colour ombre).
-  insert into public.service_addons (service_id, name, price, unit_label, duration_added, sort_order)
-  select s.id, x.name, x.price, x.unit_label, x.duration_added, x.sort_order
+  insert into public.service_addons (salon_id, service_id, name, price, unit_label, duration_added, sort_order)
+  select v_sid, s.id, x.name, x.price, x.unit_label, x.duration_added, x.sort_order
     from public.services s,
          (values
            ('French',              100, 'per finger', 0, 0),
@@ -229,8 +232,8 @@ begin
 
   -- Tier variants — Soft (Classic / Premium Strip)
   -- Half Arms: 2500 / 3000 / 4500 / 5000
-  insert into public.service_variants (service_id, name, price, sort_order)
-  select s.id, n, p, ord
+  insert into public.service_variants (salon_id, service_id, name, price, sort_order)
+  select v_sid, s.id, n, p, ord
     from public.services s,
          (values
            ('Classic Strip',    2500, 0),
@@ -241,92 +244,92 @@ begin
    where s.salon_id = v_sid and s.name = 'Wax — Half Arms';
 
   -- Full Arms: 3200 / 3500 / 5000 / 6000
-  insert into public.service_variants (service_id, name, price, sort_order)
-  select s.id, n, p, ord
+  insert into public.service_variants (salon_id, service_id, name, price, sort_order)
+  select v_sid, s.id, n, p, ord
     from public.services s,
          (values ('Classic Strip',3200,0),('Premium Strip',3500,1),('White Chocolate',5000,2),('Luxury Wax',6000,3)) as v(n,p,ord)
    where s.salon_id = v_sid and s.name = 'Wax — Full Arms';
 
   -- Half Legs: 3200 / 3500 / 5000 / 5700
-  insert into public.service_variants (service_id, name, price, sort_order)
-  select s.id, n, p, ord
+  insert into public.service_variants (salon_id, service_id, name, price, sort_order)
+  select v_sid, s.id, n, p, ord
     from public.services s,
          (values ('Classic Strip',3200,0),('Premium Strip',3500,1),('White Chocolate',5000,2),('Luxury Wax',5700,3)) as v(n,p,ord)
    where s.salon_id = v_sid and s.name = 'Wax — Half Legs';
 
   -- Full Legs: 3700 / 4000 / 5500 / 6200
-  insert into public.service_variants (service_id, name, price, sort_order)
-  select s.id, n, p, ord
+  insert into public.service_variants (salon_id, service_id, name, price, sort_order)
+  select v_sid, s.id, n, p, ord
     from public.services s,
          (values ('Classic Strip',3700,0),('Premium Strip',4000,1),('White Chocolate',5500,2),('Luxury Wax',6200,3)) as v(n,p,ord)
    where s.salon_id = v_sid and s.name = 'Wax — Full Legs';
 
   -- Underarms (hard wax only): White Chocolate 1200 / Luxury 1700
-  insert into public.service_variants (service_id, name, price, sort_order)
-  select s.id, n, p, ord
+  insert into public.service_variants (salon_id, service_id, name, price, sort_order)
+  select v_sid, s.id, n, p, ord
     from public.services s,
          (values ('White Chocolate',1200,0),('Luxury Wax',1700,1)) as v(n,p,ord)
    where s.salon_id = v_sid and s.name = 'Wax — Underarms';
 
   -- Chest: 1200 / 1500 / 2000 / 2500
-  insert into public.service_variants (service_id, name, price, sort_order)
-  select s.id, n, p, ord
+  insert into public.service_variants (salon_id, service_id, name, price, sort_order)
+  select v_sid, s.id, n, p, ord
     from public.services s,
          (values ('Classic Strip',1200,0),('Premium Strip',1500,1),('White Chocolate',2000,2),('Luxury Wax',2500,3)) as v(n,p,ord)
    where s.salon_id = v_sid and s.name = 'Wax — Chest';
 
   -- Stomach: 1000 / 1200 / 1500 / 1700
-  insert into public.service_variants (service_id, name, price, sort_order)
-  select s.id, n, p, ord
+  insert into public.service_variants (salon_id, service_id, name, price, sort_order)
+  select v_sid, s.id, n, p, ord
     from public.services s,
          (values ('Classic Strip',1000,0),('Premium Strip',1200,1),('White Chocolate',1500,2),('Luxury Wax',1700,3)) as v(n,p,ord)
    where s.salon_id = v_sid and s.name = 'Wax — Stomach';
 
   -- Waist Line: 1500 / 1800 / 2300 / 2800
-  insert into public.service_variants (service_id, name, price, sort_order)
-  select s.id, n, p, ord
+  insert into public.service_variants (salon_id, service_id, name, price, sort_order)
+  select v_sid, s.id, n, p, ord
     from public.services s,
          (values ('Classic Strip',1500,0),('Premium Strip',1800,1),('White Chocolate',2300,2),('Luxury Wax',2800,3)) as v(n,p,ord)
    where s.salon_id = v_sid and s.name = 'Wax — Waist Line';
 
   -- Bikini Line (hard wax only): 3000 / 3500
-  insert into public.service_variants (service_id, name, price, sort_order)
-  select s.id, n, p, ord
+  insert into public.service_variants (salon_id, service_id, name, price, sort_order)
+  select v_sid, s.id, n, p, ord
     from public.services s,
          (values ('White Chocolate',3000,0),('Luxury Wax',3500,1)) as v(n,p,ord)
    where s.salon_id = v_sid and s.name = 'Wax — Bikini Line';
 
   -- Brazilian (hard wax only): 5000 / 5500
-  insert into public.service_variants (service_id, name, price, sort_order)
-  select s.id, n, p, ord
+  insert into public.service_variants (salon_id, service_id, name, price, sort_order)
+  select v_sid, s.id, n, p, ord
     from public.services s,
          (values ('White Chocolate',5000,0),('Luxury Wax',5500,1)) as v(n,p,ord)
    where s.salon_id = v_sid and s.name = 'Wax — Brazilian';
 
   -- Hollywood (hard wax only): 5500 / 6000
-  insert into public.service_variants (service_id, name, price, sort_order)
-  select s.id, n, p, ord
+  insert into public.service_variants (salon_id, service_id, name, price, sort_order)
+  select v_sid, s.id, n, p, ord
     from public.services s,
          (values ('White Chocolate',5500,0),('Luxury Wax',6000,1)) as v(n,p,ord)
    where s.salon_id = v_sid and s.name = 'Wax — Hollywood';
 
   -- Half Back: 2000 / 2500 / 3000 / 3500
-  insert into public.service_variants (service_id, name, price, sort_order)
-  select s.id, n, p, ord
+  insert into public.service_variants (salon_id, service_id, name, price, sort_order)
+  select v_sid, s.id, n, p, ord
     from public.services s,
          (values ('Classic Strip',2000,0),('Premium Strip',2500,1),('White Chocolate',3000,2),('Luxury Wax',3500,3)) as v(n,p,ord)
    where s.salon_id = v_sid and s.name = 'Wax — Half Back';
 
   -- Back: 3000 / 3500 / 4000 / 5500
-  insert into public.service_variants (service_id, name, price, sort_order)
-  select s.id, n, p, ord
+  insert into public.service_variants (salon_id, service_id, name, price, sort_order)
+  select v_sid, s.id, n, p, ord
     from public.services s,
          (values ('Classic Strip',3000,0),('Premium Strip',3500,1),('White Chocolate',4000,2),('Luxury Wax',5500,3)) as v(n,p,ord)
    where s.salon_id = v_sid and s.name = 'Wax — Back';
 
   -- Buttocks: 2000 / 2500 / 3000 / 3500
-  insert into public.service_variants (service_id, name, price, sort_order)
-  select s.id, n, p, ord
+  insert into public.service_variants (salon_id, service_id, name, price, sort_order)
+  select v_sid, s.id, n, p, ord
     from public.services s,
          (values ('Classic Strip',2000,0),('Premium Strip',2500,1),('White Chocolate',3000,2),('Luxury Wax',3500,3)) as v(n,p,ord)
    where s.salon_id = v_sid and s.name = 'Wax — Buttocks';
