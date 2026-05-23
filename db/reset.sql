@@ -1,10 +1,16 @@
 -- ════════════════════════════════════════════════════════════════════════════
--- SalonOS — Full database reset (Test Salon)
+-- SalonOS — Full database reset (clean install + Test Salon demo data)
 --
---  Drops everything in the public schema we care about, recreates the
---  full schema, RLS policies, and seeds Test Salon with medium-volume
---  dummy data: 5 staff, 30 customers, ~40 services, 5 station types,
---  and ~25 appointments spread across the next two weeks.
+--  Drops every table in the public schema we care about, recreates the
+--  complete schema (including service variants, add-ons, per-unit pricing
+--  and patch-test flags), all RLS policies, and seeds Test Salon with
+--  medium-volume dummy data: 5 staff, 30 customers, ~40 services, 5 station
+--  types, and ~25 appointments spread across the next two weeks.
+--
+--  Single source of truth for the current schema. After running this,
+--  db/services_extensions.sql and db/split_nails_category.sql are NOT
+--  needed (they're in-place upgrade paths for installs that pre-date this
+--  unified file).
 --
 -- ── HOW TO USE ───────────────────────────────────────────────────────────────
 --
@@ -22,19 +28,33 @@
 --  STEP 3 — Sign in at /login
 --    Email: owner@testsalon.com    Password: 123456
 --
+-- ── WANT A REAL SALON ON TOP OF THIS? ───────────────────────────────────────
+--  After this file completes you can add Pastel 93 (or any other salon)
+--  by running, in order:
+--    1. db/pastel93_setup.sql      — creates the salon + links auth user
+--    2. db/pastel93_services.sql   — seeds the full catalogue
+--
+-- ── DON'T WANT THE TEST SALON DEMO DATA? ────────────────────────────────────
+--  After running this file, drop the demo salon with a single statement —
+--  the cascade clears its staff, services, customers, appointments, etc.:
+--    delete from public.salons where name = 'Test Salon';
+--
 --  Re-running this script is safe — it wipes and rebuilds every table.
 -- ════════════════════════════════════════════════════════════════════════════
 
 
 -- ── 0. CLEAN SLATE ─────────────────────────────────────────────────────────
 
-drop table if exists public.appointments  cascade;
-drop table if exists public.customers     cascade;
-drop table if exists public.services      cascade;
-drop table if exists public.station_types cascade;
-drop table if exists public.staff         cascade;
-drop table if exists public.salon_users   cascade;
-drop table if exists public.salons        cascade;
+drop table if exists public.appointment_addons cascade;
+drop table if exists public.service_addons     cascade;
+drop table if exists public.service_variants   cascade;
+drop table if exists public.appointments       cascade;
+drop table if exists public.customers          cascade;
+drop table if exists public.services           cascade;
+drop table if exists public.station_types      cascade;
+drop table if exists public.staff              cascade;
+drop table if exists public.salon_users        cascade;
+drop table if exists public.salons             cascade;
 
 drop function if exists public.current_salon_id() cascade;
 
@@ -156,21 +176,26 @@ create policy "station_types: salon all"
 -- ── 7. SERVICES ────────────────────────────────────────────────────────────
 
 create table public.services (
-  id               bigserial    primary key,
-  salon_id         uuid         not null
-                                default public.current_salon_id()
-                                references public.salons(id) on delete cascade,
-  name             text         not null,
-  category         text,
-  description      text,
-  duration         integer      not null default 60,    -- minutes
-  price            numeric(10,2) not null default 0,    -- LKR
-  commission_rate  numeric(5,2)
-                   check (commission_rate is null
-                       or (commission_rate >= 0 and commission_rate <= 100)),
-  station_type_id  bigint       references public.station_types(id) on delete set null,
-  enabled          boolean      not null default true,
-  created_at       timestamptz  not null default now()
+  id                   bigserial    primary key,
+  salon_id             uuid         not null
+                                    default public.current_salon_id()
+                                    references public.salons(id) on delete cascade,
+  name                 text         not null,
+  category             text,
+  description          text,
+  duration             integer      not null default 60,    -- minutes
+  price                numeric(10,2) not null default 0,    -- LKR (base price; overridden by variant when has_variants is true)
+  commission_rate      numeric(5,2)
+                       check (commission_rate is null
+                           or (commission_rate >= 0 and commission_rate <= 100)),
+  station_type_id      bigint       references public.station_types(id) on delete set null,
+  enabled              boolean      not null default true,
+  -- ── Catalogue-extension columns ──
+  unit_label           text,                                -- "per nail" / "per finger" — null = flat-priced
+  requires_patch_test  boolean      not null default false, -- show safety warning at booking
+  has_variants         boolean      not null default false, -- true = price comes from service_variants
+  allows_addons        boolean      not null default false, -- true = service_addons can stack at booking
+  created_at           timestamptz  not null default now()
 );
 
 alter table public.services enable row level security;
@@ -179,6 +204,68 @@ create policy "services: salon all"
   on public.services for all
   using       (salon_id = public.current_salon_id())
   with check  (salon_id = public.current_salon_id());
+
+
+-- ── 7b. SERVICE_VARIANTS ───────────────────────────────────────────────────
+--   Tiered pricing for services flagged has_variants — e.g. one "Full Legs"
+--   service sold at 4 different wax types, each with its own price.
+
+create table public.service_variants (
+  id                bigserial     primary key,
+  salon_id          uuid          not null
+                                  default public.current_salon_id()
+                                  references public.salons(id) on delete cascade,
+  service_id        bigint        not null
+                                  references public.services(id) on delete cascade,
+  name              text          not null,
+  price             numeric(10,2) not null default 0 check (price >= 0),
+  duration_override integer       check (duration_override is null or duration_override > 0),
+  sort_order        integer       not null default 0,
+  enabled           boolean       not null default true,
+  created_at        timestamptz   not null default now()
+);
+
+alter table public.service_variants enable row level security;
+
+create policy "service_variants: salon all"
+  on public.service_variants for all
+  using       (salon_id = public.current_salon_id())
+  with check  (salon_id = public.current_salon_id());
+
+create index service_variants_service_idx
+  on public.service_variants (service_id, sort_order);
+
+
+-- ── 7c. SERVICE_ADDONS ─────────────────────────────────────────────────────
+--   Optional modifiers that stack onto a base service (French finish,
+--   nail art per finger, foil design, rhinestone…). Most happen during the
+--   base service so duration_added defaults to 0.
+
+create table public.service_addons (
+  id              bigserial     primary key,
+  salon_id        uuid          not null
+                                default public.current_salon_id()
+                                references public.salons(id) on delete cascade,
+  service_id      bigint        not null
+                                references public.services(id) on delete cascade,
+  name            text          not null,
+  price           numeric(10,2) not null default 0 check (price >= 0),
+  unit_label      text,                                    -- "per finger" / "per nail" / null = flat
+  duration_added  integer       not null default 0 check (duration_added >= 0),
+  sort_order      integer       not null default 0,
+  enabled         boolean       not null default true,
+  created_at      timestamptz   not null default now()
+);
+
+alter table public.service_addons enable row level security;
+
+create policy "service_addons: salon all"
+  on public.service_addons for all
+  using       (salon_id = public.current_salon_id())
+  with check  (salon_id = public.current_salon_id());
+
+create index service_addons_service_idx
+  on public.service_addons (service_id, sort_order);
 
 
 -- ── 8. CUSTOMERS ───────────────────────────────────────────────────────────
@@ -226,6 +313,12 @@ create table public.appointments (
   tint             text         check (tint is null or tint in ('pink','champagne','plum')),
   payment_method   text         check (payment_method is null or payment_method in ('cash','card','transfer')),
   discount_amount  numeric(10,2) not null default 0 check (discount_amount >= 0),
+  -- ── Catalogue-extension snapshots ──
+  quantity         integer      not null default 1 check (quantity > 0),
+  unit_label       text,                                    -- snapshot of the unit at booking time
+  variant_id       bigint       references public.service_variants(id) on delete set null,
+  variant_name     text,                                    -- snapshot — survives variant deletion
+  variant_price    numeric(10,2),                           -- snapshot — survives variant edits
   created_at       timestamptz  not null default now()
 );
 
@@ -235,6 +328,36 @@ create policy "appointments: salon all"
   on public.appointments for all
   using       (salon_id = public.current_salon_id())
   with check  (salon_id = public.current_salon_id());
+
+
+-- ── 9b. APPOINTMENT_ADDONS ──────────────────────────────────────────────────
+--   Which add-ons were applied to each appointment. Snapshots name/price/unit
+--   so editing the master service_addons rows later doesn't rewrite history.
+
+create table public.appointment_addons (
+  id              bigserial     primary key,
+  salon_id        uuid          not null
+                                default public.current_salon_id()
+                                references public.salons(id) on delete cascade,
+  appointment_id  bigint        not null
+                                references public.appointments(id) on delete cascade,
+  addon_id        bigint        references public.service_addons(id) on delete set null,
+  name            text          not null,
+  price           numeric(10,2) not null check (price >= 0),
+  quantity        integer       not null default 1 check (quantity > 0),
+  unit_label      text,
+  created_at      timestamptz   not null default now()
+);
+
+alter table public.appointment_addons enable row level security;
+
+create policy "appointment_addons: salon all"
+  on public.appointment_addons for all
+  using       (salon_id = public.current_salon_id())
+  with check  (salon_id = public.current_salon_id());
+
+create index appointment_addons_apt_idx
+  on public.appointment_addons (appointment_id);
 
 
 -- ════════════════════════════════════════════════════════════════════════════
@@ -503,11 +626,14 @@ end $$;
 
 -- ── VERIFY ─────────────────────────────────────────────────────────────────
 
-select 'salons'        as table_name, count(*) from public.salons
-union all select 'salon_users',    count(*) from public.salon_users
-union all select 'staff',          count(*) from public.staff
-union all select 'station_types',  count(*) from public.station_types
-union all select 'services',       count(*) from public.services
-union all select 'customers',      count(*) from public.customers
-union all select 'appointments',   count(*) from public.appointments
+select 'salons'              as table_name, count(*) from public.salons
+union all select 'salon_users',         count(*) from public.salon_users
+union all select 'staff',               count(*) from public.staff
+union all select 'station_types',       count(*) from public.station_types
+union all select 'services',            count(*) from public.services
+union all select 'service_variants',    count(*) from public.service_variants
+union all select 'service_addons',      count(*) from public.service_addons
+union all select 'customers',           count(*) from public.customers
+union all select 'appointments',        count(*) from public.appointments
+union all select 'appointment_addons',  count(*) from public.appointment_addons
 order by table_name;
