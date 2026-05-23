@@ -77,6 +77,7 @@ export default function AppointmentDetailModal({
   const [paymentStep,   setPaymentStep]   = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<"cash" | "card" | "transfer" | null>(null);
   const [discount,      setDiscount]      = useState(0);
+  const [cancelConfirm, setCancelConfirm] = useState(false);
 
   // Staff reassignment: tracks the selected staff in the dropdown.
   // Initialised to the appointment's current staff when the modal opens.
@@ -88,6 +89,7 @@ export default function AppointmentDetailModal({
       setPaymentStep(false);
       setPaymentMethod(null);
       setDiscount(0);
+      setCancelConfirm(false);
       setReassignStaffId(apt?.staffId ?? null);
     }
   }, [open]);
@@ -166,6 +168,27 @@ export default function AppointmentDetailModal({
         {saving ? "Saving…" : "Confirm complete"}
       </button>
     </>
+  ) : cancelConfirm ? (
+    <>
+      <button
+        type="button"
+        className="btn btn-ghost"
+        style={{ marginRight: "auto" }}
+        onClick={() => setCancelConfirm(false)}
+        disabled={saving}
+      >
+        Never mind
+      </button>
+      <button
+        type="button"
+        className="btn btn-primary"
+        style={{ background: "#A53A2C", borderColor: "#A53A2C" }}
+        onClick={() => { onStatusChange(apt.id, "cancelled"); setCancelConfirm(false); }}
+        disabled={saving}
+      >
+        {saving ? "Cancelling…" : "Yes, cancel it"}
+      </button>
+    </>
   ) : (
     <>
       {isActive && (
@@ -173,7 +196,7 @@ export default function AppointmentDetailModal({
           type="button"
           className="btn btn-ghost"
           style={{ marginRight: "auto", color: "#A53A2C" }}
-          onClick={() => onStatusChange(apt.id, "cancelled")}
+          onClick={() => setCancelConfirm(true)}
           disabled={anyBusy}
         >
           Cancel appointment
@@ -210,13 +233,44 @@ export default function AppointmentDetailModal({
   return (
     <Modal
       open={open}
-      onClose={paymentStep ? handleCancelPayment : onClose}
+      onClose={
+        paymentStep    ? handleCancelPayment       :
+        cancelConfirm  ? () => setCancelConfirm(false) :
+        onClose
+      }
       eyebrow="Appointment"
       title={apt.customerName}
       subtitle={`${apt.serviceName} · ${apt.duration} min`}
       footer={footer}
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+
+        {/* ── Cancel confirmation step ── */}
+        {cancelConfirm && !paymentStep && (
+          <div style={{
+            background: "#FEF2F2",
+            borderRadius: 12,
+            padding: "20px 22px",
+            border: "1.5px solid #FECACA",
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
+          }}>
+            <div style={{
+              fontFamily: "var(--font-serif)",
+              fontSize: 19,
+              fontWeight: 500,
+              color: "#991B1B",
+            }}>
+              Cancel this appointment?
+            </div>
+            <div style={{ fontSize: 13, color: "#7F1D1D", lineHeight: 1.65 }}>
+              <strong>{apt.customerName}</strong>&rsquo;s {apt.serviceName} on{" "}
+              {dateLabel} at {formatTime12(apt.time)} will be marked as cancelled.
+              This cannot be undone.
+            </div>
+          </div>
+        )}
 
         {/* ── Payment capture step ── */}
         {paymentStep && (
@@ -329,7 +383,7 @@ export default function AppointmentDetailModal({
         )}
 
         {/* ── Main detail view ── */}
-        {!paymentStep && (
+        {!paymentStep && !cancelConfirm && (
           <>
             {/* Date, time, status */}
             <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>

@@ -54,15 +54,43 @@ function getRangeBounds(range: RangeKey) {
 
 const MON_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
-function getTrendMonths(): { label: string; key: string }[] {
+/** Returns the chart buckets that match the selected report range. */
+function getTrendBuckets(range: RangeKey): { label: string; key: string }[] {
   const now = new Date();
-  return Array.from({ length: 6 }, (_, i) => {
-    const d = new Date(now.getFullYear(), now.getMonth() - 5 + i, 1);
-    return {
-      label: MON_SHORT[d.getMonth()],
-      key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
-    };
-  });
+  const y   = now.getFullYear();
+  const m   = now.getMonth(); // 0-indexed
+
+  if (range === "month") {
+    return [
+      { label: "Wk 1", key: "week1" },
+      { label: "Wk 2", key: "week2" },
+      { label: "Wk 3", key: "week3" },
+      { label: "Wk 4", key: "week4" },
+    ];
+  } else if (range === "quarter") {
+    return Array.from({ length: 3 }, (_, i) => {
+      const d = new Date(y, m - 2 + i, 1);
+      return {
+        label: MON_SHORT[d.getMonth()],
+        key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+      };
+    });
+  } else {
+    // year: all 12 months of the current year
+    return Array.from({ length: 12 }, (_, i) => ({
+      label: MON_SHORT[i],
+      key: `${y}-${String(i + 1).padStart(2, "0")}`,
+    }));
+  }
+}
+
+/** Maps a date string ("YYYY-MM-DD") to its week bucket key for the month view. */
+function weekKeyFromDate(dateStr: string): string {
+  const day = parseInt(dateStr.slice(8), 10);
+  if (day <= 7)  return "week1";
+  if (day <= 14) return "week2";
+  if (day <= 21) return "week3";
+  return "week4";
 }
 
 // ── Data types ──────────────────────────────────────────────────────────────
@@ -91,11 +119,9 @@ type ReportData = {
 
 async function fetchReports(range: RangeKey): Promise<ReportData> {
   const { start, end, prevStart, prevEnd } = getRangeBounds(range);
-  const trendMonths = getTrendMonths();
-  const trendStart = trendMonths[0].key + "-01";
 
   // Run all queries; some may fail if optional migrations haven't been applied yet.
-  const [currRes, prevRes, priorRes, trendRes, commRes] = await Promise.all([
+  const [currRes, prevRes, priorRes, commRes] = await Promise.all([
     // Current period — use * so missing columns (payment_method, discount_amount) don't break the query
     supabase
       .from("appointments")
@@ -116,13 +142,6 @@ async function fetchReports(range: RangeKey): Promise<ReportData> {
       .select("customer_id")
       .lt("date", start),
 
-    // Trend: completed appointments for last 6 months with price
-    supabase
-      .from("appointments")
-      .select("date, services(price)")
-      .gte("date", trendStart)
-      .eq("status", "completed"),
-
     // Commission: completed appointments with staff + service commission_rate
     // May fail pre-migration — handled gracefully below
     supabase
@@ -136,7 +155,6 @@ async function fetchReports(range: RangeKey): Promise<ReportData> {
   const currRaw  = currRes.data;
   const prevRaw  = prevRes.data;
   const priorRaw = priorRes.data;
-  const trendRaw = trendRes.data;
   // For commissions, only use rows that actually have a non-null staff_id
   const commRaw  = commRes.error ? null : (commRes.data ?? []).filter(
     (r: Record<string, unknown>) => r.staff_id != null,
@@ -145,7 +163,6 @@ async function fetchReports(range: RangeKey): Promise<ReportData> {
   const curr  = currRaw  ?? [];
   const prev  = prevRaw  ?? [];
   const prior = priorRaw ?? [];
-  const trend = trendRaw ?? [];
   const comm  = commRaw  ?? [];
 
   // ── Revenue ──
@@ -200,16 +217,18 @@ async function fetchReports(range: RangeKey): Promise<ReportData> {
     .sort((a, b) => b.spend - a.spend)
     .slice(0, 5);
 
-  // ── Revenue trend ──
-  const monthRevMap = new Map<string, number>();
-  for (const a of trend as { date: string; services?: unknown }[]) {
-    const key = a.date.slice(0, 7);
-    const p   = (a.services as { price?: number } | null)?.price ?? 0;
-    monthRevMap.set(key, (monthRevMap.get(key) ?? 0) + p);
+  // ── Revenue trend — uses the same completed set as the selected period ──
+  const trendBuckets = getTrendBuckets(range);
+  const trendRevMap  = new Map<string, number>();
+  for (const a of completed as (AptRow & { date?: string })[]) {
+    if (!a.date) continue;
+    const key = range === "month" ? weekKeyFromDate(a.date) : a.date.slice(0, 7);
+    const p   = price(a);
+    trendRevMap.set(key, (trendRevMap.get(key) ?? 0) + p);
   }
-  const revenueByMonth = trendMonths.map(({ label, key }) => ({
+  const revenueByMonth = trendBuckets.map(({ label, key }) => ({
     label,
-    value: monthRevMap.get(key) ?? 0,
+    value: trendRevMap.get(key) ?? 0,
   }));
 
   // ── Staff commissions ──
@@ -297,6 +316,12 @@ const RANGE_LABEL: Record<RangeKey, string> = {
   month:   "This month",
   quarter: "Last 3 months",
   year:    "This year",
+};
+
+const TREND_META: Record<RangeKey, string> = {
+  month:   "Week by week · this month · LKR",
+  quarter: "Month by month · last 3 months · LKR",
+  year:    "Month by month · this year · LKR",
 };
 
 export default function ReportsPage() {
@@ -408,7 +433,7 @@ export default function ReportsPage() {
         <div className="rep-card">
           <div className="rep-card-head">
             <div className="rep-card-title">Revenue trend</div>
-            <div className="rep-card-meta">Last 6 months · completed appointments · LKR</div>
+            <div className="rep-card-meta">{TREND_META[range]}</div>
           </div>
           {loading ? (
             <div style={{ height: 240, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--ink-400)", fontSize: 13 }}>
