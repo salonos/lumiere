@@ -32,7 +32,15 @@
 
 @layer base {
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { min-height: 100%; }
+  html, body {
+    min-height: 100%;
+    /* Prevent rogue elements (e.g. wide tables, dragged events, off-screen
+       portals) from pushing the page horizontally and creating an unwanted
+       horizontal scrollbar on the body. The .main area still scrolls
+       vertically via its own overflow-y. */
+    overflow-x: hidden;
+    max-width: 100vw;
+  }
   body {
     font-family: var(--font-sans);
     color: var(--ink-900);
@@ -1100,7 +1108,13 @@
 /* =====================================================
    PAGE: APP SHELL (Dashboard, Customer, Settings shared)
    ===================================================== */
-.page-app { height: 100vh; display: flex; overflow: hidden; }
+.page-app {
+  height: 100vh;
+  display: flex;
+  overflow: hidden;
+  width: 100%;
+  max-width: 100vw;
+}
 
 .page-app .sidebar {
   width: 240px;
@@ -1180,7 +1194,12 @@
   min-width: 0;
   padding: 56px 64px 80px;
   max-width: 1280px;
+  /* Center the capped content within the remaining flex space so wide
+     screens don't get an empty right-side gap. `margin: 0 auto` on a
+     flex child absorbs free space symmetrically. */
+  margin: 0 auto;
   overflow-y: auto;
+  overflow-x: hidden;
   height: 100vh;
 }
 
