@@ -65,13 +65,16 @@ export default function AppointmentDetailModal({
   saving,
 }: Props) {
   const [paymentStep,   setPaymentStep]   = useState(false);
-  const [paymentMethod, setPaymentMethod] = useState<"cash" | "card" | "transfer">("cash");
+  // null = user hasn't chosen yet — required before "Confirm complete" enables.
+  // This forces the salon to record how each appointment was paid so the daily
+  // reconciliation has accurate cash/card/transfer breakdowns.
+  const [paymentMethod, setPaymentMethod] = useState<"cash" | "card" | "transfer" | null>(null);
   const [discount,      setDiscount]      = useState(0);
 
   useEffect(() => {
     if (open) {
       setPaymentStep(false);
-      setPaymentMethod("cash");
+      setPaymentMethod(null);
       setDiscount(0);
     }
   }, [open]);
@@ -95,6 +98,7 @@ export default function AppointmentDetailModal({
   // ── Payment step (opened when "Mark complete" is clicked) ─────────────────
 
   const handleConfirmComplete = () => {
+    if (!paymentMethod) return; // guard: button is also disabled below
     onStatusChange(apt.id, "completed", { method: paymentMethod, discount });
     setPaymentStep(false);
   };
@@ -102,7 +106,7 @@ export default function AppointmentDetailModal({
   const handleCancelPayment = () => {
     setPaymentStep(false);
     setDiscount(0);
-    setPaymentMethod("cash");
+    setPaymentMethod(null);
   };
 
   // ── Status chip ───────────────────────────────────────────────────────────
@@ -138,7 +142,8 @@ export default function AppointmentDetailModal({
         type="button"
         className="btn btn-primary"
         onClick={handleConfirmComplete}
-        disabled={saving}
+        disabled={saving || !paymentMethod}
+        title={!paymentMethod ? "Pick a payment method first" : undefined}
       >
         {saving ? "Saving…" : "Confirm complete"}
       </button>
@@ -198,38 +203,71 @@ export default function AppointmentDetailModal({
           <div style={{
             background: "var(--cream)",
             borderRadius: 12,
-            padding: "18px 20px",
+            padding: "20px 22px",
             border: "1px solid var(--ink-100)",
             display: "flex",
             flexDirection: "column",
-            gap: 16,
+            gap: 18,
           }}>
-            <div style={labelStyle}>Record payment</div>
+            <div>
+              <div style={{
+                fontFamily: "var(--font-serif)",
+                fontSize: 20,
+                fontWeight: 500,
+                color: "var(--plum-900)",
+                marginBottom: 4,
+              }}>
+                How was this paid?
+              </div>
+              <div style={{ fontSize: 12, color: "var(--ink-500)", lineHeight: 1.5 }}>
+                Pick a method so it appears in your daily reconciliation.
+                This is required before marking the appointment complete.
+              </div>
+            </div>
 
-            {/* Payment method */}
-            <div style={{ display: "flex", gap: 8 }}>
-              {PAYMENT_METHODS.map(pm => (
-                <button
-                  key={pm.value}
-                  type="button"
-                  onClick={() => setPaymentMethod(pm.value as "cash" | "card" | "transfer")}
-                  style={{
-                    flex: 1,
-                    padding: "9px 6px",
-                    borderRadius: 8,
-                    border: `1.5px solid ${paymentMethod === pm.value ? "var(--plum-500)" : "var(--ink-100)"}`,
-                    background: paymentMethod === pm.value ? "var(--plum-50)" : "var(--white)",
-                    color: paymentMethod === pm.value ? "var(--plum-800)" : "var(--ink-700)",
-                    fontSize: 12,
-                    fontWeight: paymentMethod === pm.value ? 600 : 400,
-                    cursor: "pointer",
-                    fontFamily: "inherit",
-                    transition: "all 0.12s",
-                  }}
-                >
-                  {pm.label}
-                </button>
-              ))}
+            {/* Payment method — required choice */}
+            <div>
+              <div style={{ ...labelStyle, marginBottom: 8 }}>
+                Payment method <span style={{ color: "#A53A2C" }}>*</span>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                {PAYMENT_METHODS.map(pm => {
+                  const selected = paymentMethod === pm.value;
+                  return (
+                    <button
+                      key={pm.value}
+                      type="button"
+                      onClick={() => setPaymentMethod(pm.value as "cash" | "card" | "transfer")}
+                      style={{
+                        flex: 1,
+                        padding: "12px 6px",
+                        borderRadius: 10,
+                        border: `1.5px solid ${selected ? "var(--plum-500)" : "var(--ink-200)"}`,
+                        background: selected ? "var(--plum-50)" : "var(--white)",
+                        color: selected ? "var(--plum-800)" : "var(--ink-700)",
+                        fontSize: 13,
+                        fontWeight: selected ? 600 : 500,
+                        cursor: "pointer",
+                        fontFamily: "inherit",
+                        transition: "all 0.12s",
+                        boxShadow: selected ? "0 0 0 3px rgba(165, 38, 104, 0.08)" : "none",
+                      }}
+                    >
+                      {pm.label}
+                    </button>
+                  );
+                })}
+              </div>
+              {!paymentMethod && (
+                <div style={{
+                  marginTop: 8,
+                  fontSize: 12,
+                  color: "#A53A2C",
+                  letterSpacing: "0.02em",
+                }}>
+                  Select cash, card, or bank transfer to continue.
+                </div>
+              )}
             </div>
 
             {/* Discount */}
@@ -256,14 +294,14 @@ export default function AppointmentDetailModal({
               display: "flex",
               justifyContent: "space-between",
               alignItems: "center",
-              paddingTop: 12,
+              paddingTop: 14,
               borderTop: "1px solid var(--ink-100)",
             }}>
               <div style={{ fontSize: 12, color: "var(--ink-500)" }}>
                 {lkr(apt.servicePrice)}
                 {discount > 0 && ` − ${lkr(discount)} discount`}
               </div>
-              <div style={{ fontSize: 15, fontWeight: 600, color: "var(--ink-900)" }}>
+              <div style={{ fontSize: 17, fontWeight: 600, color: "var(--ink-900)" }}>
                 {lkr(netAmount)}
               </div>
             </div>
