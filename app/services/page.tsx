@@ -21,7 +21,8 @@ import { supabase } from "@/lib/supabase";
 const CATEGORY_ORDER: ServiceCategory[] = [
   "Hair",
   "Skin",
-  "Nails",
+  "Hands",
+  "Feet",
   "Threading",
   "Bridal",
   "Massage",

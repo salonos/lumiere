@@ -7,7 +7,8 @@
 export type ServiceCategory =
   | "Hair"
   | "Skin"
-  | "Nails"
+  | "Hands"
+  | "Feet"
   | "Threading"
   | "Bridal"
   | "Massage"
@@ -54,7 +55,8 @@ export type ServiceAddon = {
 export const CATEGORY_BLURB: Record<ServiceCategory, string> = {
   Hair:      "Cuts, colour, and care",
   Skin:      "Facials and skin rituals",
-  Nails:     "Manicures and nail art",
+  Hands:     "Manicures, nail art, hand care",
+  Feet:      "Pedicures, foot care, toe nails",
   Threading: "Brows and shaping",
   Bridal:    "For the day that matters",
   Massage:   "Touch that restores",

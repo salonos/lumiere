@@ -340,20 +340,20 @@ begin
   insert into public.services
     (salon_id, name, category, description, duration, price, commission_rate, station_type_id, enabled)
   values
-    (v_sid, 'Classic Manicure',      'Nails', 'Shape, buff, cuticle care, and polish.',                       45,  1500, 10, v_nail, true),
-    (v_sid, 'Gel Manicure',          'Nails', 'Long-lasting gel polish — chip-free for 2–3 weeks.',           60,  2800, 10, v_nail, true),
-    (v_sid, 'Acrylic Extensions',    'Nails', 'Full set of acrylic nail extensions.',                         90,  5000, 10, v_nail, true),
-    (v_sid, 'Nail Art (per set)',    'Nails', 'Custom nail art designs — consult for options.',               45,  1200, 10, v_nail, true),
-    (v_sid, 'Nail Removal',          'Nails', 'Safe removal of gel, acrylic, or extensions.',                 30,   800,  8, v_nail, true);
+    (v_sid, 'Classic Manicure',      'Hands', 'Shape, buff, cuticle care, and polish.',                       45,  1500, 10, v_nail, true),
+    (v_sid, 'Gel Manicure',          'Hands', 'Long-lasting gel polish — chip-free for 2–3 weeks.',           60,  2800, 10, v_nail, true),
+    (v_sid, 'Acrylic Extensions',    'Hands', 'Full set of acrylic nail extensions.',                         90,  5000, 10, v_nail, true),
+    (v_sid, 'Nail Art (per set)',    'Hands', 'Custom nail art designs — consult for options.',               45,  1200, 10, v_nail, true),
+    (v_sid, 'Nail Removal',          'Hands', 'Safe removal of gel, acrylic, or extensions.',                 30,   800,  8, v_nail, true);
 
   -- PEDICURE
   insert into public.services
     (salon_id, name, category, description, duration, price, commission_rate, station_type_id, enabled)
   values
-    (v_sid, 'Classic Pedicure',      'Nails', 'Soak, shape, cuticle care, and polish.',                       60,  2000, 10, v_pedi, true),
-    (v_sid, 'Spa Pedicure',          'Nails', 'Classic pedicure with a hot-stone foot massage.',              75,  3200, 10, v_pedi, true),
-    (v_sid, 'Gel Pedicure',          'Nails', 'Spa pedicure finished with long-lasting gel polish.',          75,  3800, 10, v_pedi, true),
-    (v_sid, 'Medical Pedicure',      'Nails', 'Therapeutic care for calluses and cracked heels.',             90,  4500, 10, v_pedi, true);
+    (v_sid, 'Classic Pedicure',      'Feet', 'Soak, shape, cuticle care, and polish.',                       60,  2000, 10, v_pedi, true),
+    (v_sid, 'Spa Pedicure',          'Feet', 'Classic pedicure with a hot-stone foot massage.',              75,  3200, 10, v_pedi, true),
+    (v_sid, 'Gel Pedicure',          'Feet', 'Spa pedicure finished with long-lasting gel polish.',          75,  3800, 10, v_pedi, true),
+    (v_sid, 'Medical Pedicure',      'Feet', 'Therapeutic care for calluses and cracked heels.',             90,  4500, 10, v_pedi, true);
 
   -- THREADING (no station)
   insert into public.services

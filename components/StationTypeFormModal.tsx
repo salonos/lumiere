@@ -19,7 +19,7 @@ export type StationTypeRow = { id: number; name: string; count: number };
 const blank: StationTypeDraft = { name: "", count: 1, serviceIds: [] };
 
 // Keep categories in display order
-const CAT_ORDER = ["Hair", "Skin", "Nails", "Threading", "Bridal", "Massage", "Wax"];
+const CAT_ORDER = ["Hair", "Skin", "Hands", "Feet", "Threading", "Bridal", "Massage", "Wax"];
 
 type Props = {
   open:          boolean;

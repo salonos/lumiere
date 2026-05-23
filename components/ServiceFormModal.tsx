@@ -10,7 +10,8 @@ type StationOption = { id: number; name: string };
 const CATEGORIES: ServiceCategory[] = [
   "Hair",
   "Skin",
-  "Nails",
+  "Hands",
+  "Feet",
   "Threading",
   "Bridal",
   "Massage",

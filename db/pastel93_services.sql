@@ -76,13 +76,13 @@ begin
   insert into public.services
     (salon_id, name, category, description, duration, price, commission_rate, station_type_id, enabled, allows_addons)
   values
-    (v_sid, 'Express Manicure', 'Nails',
+    (v_sid, 'Express Manicure', 'Hands',
      'Nail trimming, shaping, cuticle care, soak, moisturising scrub, lotion, regular nail polish. (40 mins)',
      40, 3000, 10, v_nail_station, true, true),
-    (v_sid, 'Classic Manicure', 'Nails',
+    (v_sid, 'Classic Manicure', 'Hands',
      'Nail trimming, shaping, cuticle care, soak, moisturising scrub, deep hydration hand mask, massaging cream with hand & wooden massager, lotion, regular nail polish. (70 mins)',
      70, 3800, 12, v_nail_station, true, true),
-    (v_sid, 'Premium Manicure', 'Nails',
+    (v_sid, 'Premium Manicure', 'Hands',
      'Nail trimming, shaping, cuticle care, soak, moisturising scrub, deep hydration hand mask, massaging cream with hand, wooden & electric massager, lotion, regular nail polish. (90 mins)',
      90, 4500, 12, v_nail_station, true, true);
 
@@ -111,13 +111,13 @@ begin
   insert into public.services
     (salon_id, name, category, description, duration, price, commission_rate, station_type_id, enabled, allows_addons)
   values
-    (v_sid, 'Express Pedicure', 'Nails',
+    (v_sid, 'Express Pedicure', 'Feet',
      'Nail trimming, shaping, cuticle care, soak, dead skin removal, moisturising scrub, lotion, regular nail polish. (40 mins)',
      40, 3500, 10, v_pedi_station, true, true),
-    (v_sid, 'Classic Pedicure', 'Nails',
+    (v_sid, 'Classic Pedicure', 'Feet',
      'Nail trimming, shaping, cuticle care, soak, dead skin removal, moisturising scrub, deep hydration foot mask, massaging cream with hand & wooden massager, lotion, regular nail polish. (70 mins)',
      70, 4500, 12, v_pedi_station, true, true),
-    (v_sid, 'Premium Pedicure', 'Nails',
+    (v_sid, 'Premium Pedicure', 'Feet',
      'Nail trimming, shaping, cuticle care, soak, jelly soak, dead skin removal, moisturising scrub, deep hydration foot mask, massaging cream with hand, wooden & electric massager, lotion, regular nail polish. (90 mins)',
      90, 5500, 12, v_pedi_station, true, true);
 
@@ -145,16 +145,16 @@ begin
   insert into public.services
     (salon_id, name, category, description, duration, price, commission_rate, station_type_id, enabled, allows_addons, unit_label)
   values
-    (v_sid, 'Acrylic on Natural Nails (Hand)',  'Nails', 'Acrylic overlay on natural nails for strength and length.',                                 75,  5000, 12, v_nail_station, true, true,  null),
-    (v_sid, 'Acrylic Full Set with Tips',       'Nails', 'Full set of acrylic extensions with clear tips.',                                            90,  6500, 12, v_nail_station, true, true,  null),
-    (v_sid, 'Acrylic Full Set with Coloured Tips','Nails','Full set of acrylic extensions finished with coloured tips.',                              90,  7000, 12, v_nail_station, true, true,  null),
-    (v_sid, 'Acrylic Re-fills',                 'Nails', 'Refill grown-out acrylic nails — recommended every 2–3 weeks.',                              60,  5000, 12, v_nail_station, true, true,  null),
-    (v_sid, 'Acrylic One Nail',                 'Nails', 'Single acrylic nail fix or addition — charged per nail.',                                    15,   500, 10, v_nail_station, true, false, 'per nail'),
-    (v_sid, 'Gel on Natural Nails (Hand)',      'Nails', 'Gel overlay on natural nails for shine and protection.',                                     75,  6000, 12, v_nail_station, true, true,  null),
-    (v_sid, 'Gel Extension with Tips',          'Nails', 'Gel extensions with tips for added length.',                                                 90,  8000, 12, v_nail_station, true, true,  null),
-    (v_sid, 'Gel Re-fills',                     'Nails', 'Refill grown-out gel nails — recommended every 2–3 weeks.',                                  60,  6000, 12, v_nail_station, true, true,  null),
-    (v_sid, 'Gel One Nail',                     'Nails', 'Single gel nail fix or addition — charged per nail.',                                        15,   600, 10, v_nail_station, true, false, 'per nail'),
-    (v_sid, 'Temporary Tips',                   'Nails', 'Quick temporary nail tips for short-term wear (e.g. a single event).',                       45,  5000, 10, v_nail_station, true, true,  null);
+    (v_sid, 'Acrylic on Natural Nails (Hand)',  'Hands', 'Acrylic overlay on natural nails for strength and length.',                                 75,  5000, 12, v_nail_station, true, true,  null),
+    (v_sid, 'Acrylic Full Set with Tips',       'Hands', 'Full set of acrylic extensions with clear tips.',                                            90,  6500, 12, v_nail_station, true, true,  null),
+    (v_sid, 'Acrylic Full Set with Coloured Tips','Hands','Full set of acrylic extensions finished with coloured tips.',                              90,  7000, 12, v_nail_station, true, true,  null),
+    (v_sid, 'Acrylic Re-fills',                 'Hands', 'Refill grown-out acrylic nails — recommended every 2–3 weeks.',                              60,  5000, 12, v_nail_station, true, true,  null),
+    (v_sid, 'Acrylic One Nail',                 'Hands', 'Single acrylic nail fix or addition — charged per nail.',                                    15,   500, 10, v_nail_station, true, false, 'per nail'),
+    (v_sid, 'Gel on Natural Nails (Hand)',      'Hands', 'Gel overlay on natural nails for shine and protection.',                                     75,  6000, 12, v_nail_station, true, true,  null),
+    (v_sid, 'Gel Extension with Tips',          'Hands', 'Gel extensions with tips for added length.',                                                 90,  8000, 12, v_nail_station, true, true,  null),
+    (v_sid, 'Gel Re-fills',                     'Hands', 'Refill grown-out gel nails — recommended every 2–3 weeks.',                                  60,  6000, 12, v_nail_station, true, true,  null),
+    (v_sid, 'Gel One Nail',                     'Hands', 'Single gel nail fix or addition — charged per nail.',                                        15,   600, 10, v_nail_station, true, false, 'per nail'),
+    (v_sid, 'Temporary Tips',                   'Hands', 'Quick temporary nail tips for short-term wear (e.g. a single event).',                       45,  5000, 10, v_nail_station, true, true,  null);
 
   -- Nail enhancement add-ons (the page 3 list — French / nail art / etc, but applied as extras
   -- on top of an enhancement service, and a few standalone extras like rhinestone & 2-3 colour ombre).
@@ -187,12 +187,12 @@ begin
   insert into public.services
     (salon_id, name, category, description, duration, price, commission_rate, station_type_id, enabled, allows_addons, unit_label)
   values
-    (v_sid, 'Acrylic on Natural Nails (Toe)',          'Nails', 'Acrylic overlay on natural toenails.',                                  60,  3800, 12, v_pedi_station, true, false, null),
-    (v_sid, 'Acrylic Full Set with Coloured Tips (Toe)','Nails','Full set of acrylic toenail extensions with coloured tips.',            75,  4500, 12, v_pedi_station, true, false, null),
-    (v_sid, 'Acrylic for Big Toe Nail',                'Nails', 'Single acrylic for a big toe — charged per nail.',                      15,   500, 10, v_pedi_station, true, false, 'per nail'),
-    (v_sid, 'Gel on Natural Nails (Toe)',              'Nails', 'Gel overlay on natural toenails.',                                      60,  4800, 12, v_pedi_station, true, false, null),
-    (v_sid, 'Gel Full Set with Coloured Tips (Toe)',   'Nails', 'Full set of gel toenail extensions with coloured tips.',                75,  5500, 12, v_pedi_station, true, false, null),
-    (v_sid, 'Gel for Big Toe Nail',                    'Nails', 'Single gel for a big toe — charged per nail.',                          15,   600, 10, v_pedi_station, true, false, 'per nail');
+    (v_sid, 'Acrylic on Natural Nails (Toe)',          'Feet', 'Acrylic overlay on natural toenails.',                                  60,  3800, 12, v_pedi_station, true, false, null),
+    (v_sid, 'Acrylic Full Set with Coloured Tips (Toe)','Feet','Full set of acrylic toenail extensions with coloured tips.',            75,  4500, 12, v_pedi_station, true, false, null),
+    (v_sid, 'Acrylic for Big Toe Nail',                'Feet', 'Single acrylic for a big toe — charged per nail.',                      15,   500, 10, v_pedi_station, true, false, 'per nail'),
+    (v_sid, 'Gel on Natural Nails (Toe)',              'Feet', 'Gel overlay on natural toenails.',                                      60,  4800, 12, v_pedi_station, true, false, null),
+    (v_sid, 'Gel Full Set with Coloured Tips (Toe)',   'Feet', 'Full set of gel toenail extensions with coloured tips.',                75,  5500, 12, v_pedi_station, true, false, null),
+    (v_sid, 'Gel for Big Toe Nail',                    'Feet', 'Single gel for a big toe — charged per nail.',                          15,   600, 10, v_pedi_station, true, false, 'per nail');
 
   -- ═══════════════════════════════════════════════════════════════════════════
   --  NAIL REMOVAL / SOAK-OFF
@@ -200,8 +200,8 @@ begin
   insert into public.services
     (salon_id, name, category, description, duration, price, commission_rate, station_type_id, enabled)
   values
-    (v_sid, 'Gel Colour Soak-off',         'Nails', 'Safe removal of gel polish via soak-off.',          15, 1000,  8, v_nail_station, true),
-    (v_sid, 'Extension / Gel Removal',     'Nails', 'Safe removal of extensions or gel overlays.',       20, 1500,  8, v_nail_station, true);
+    (v_sid, 'Gel Colour Soak-off',         'Hands', 'Safe removal of gel polish via soak-off.',          15, 1000,  8, v_nail_station, true),
+    (v_sid, 'Extension / Gel Removal',     'Hands', 'Safe removal of extensions or gel overlays.',       20, 1500,  8, v_nail_station, true);
 
   -- ═══════════════════════════════════════════════════════════════════════════
   --  WAXING — NECK TO TOE (page 6) — tiered pricing
@@ -384,13 +384,13 @@ begin
   insert into public.services
     (salon_id, name, category, description, duration, price, commission_rate, station_type_id, enabled)
   values
-    (v_sid, 'Tiny Tots Treat',       'Nails',
+    (v_sid, 'Tiny Tots Treat',       'Hands',
      'Soft filing, gentle scrubbing, jelly soak, detail nail care, nail shaping, cuticle care, regular nail polish with simple nail art, relaxing hand & leg massage. (40 mins)',
      40, 4000, 10, v_nail_station, true),
-    (v_sid, 'Sweet Little Bliss',    'Nails',
+    (v_sid, 'Sweet Little Bliss',    'Hands',
      'Tiny Tots Treat + hair coloured braiding. (60 mins)',
      60, 5000, 10, v_nail_station, true),
-    (v_sid, 'Giggles & Glamour',     'Nails',
+    (v_sid, 'Giggles & Glamour',     'Hands',
      'Sweet Little Bliss + light shimmer makeup. (75 mins)',
      75, 6000, 10, v_nail_station, true);
 
