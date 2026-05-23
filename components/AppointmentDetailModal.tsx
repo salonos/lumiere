@@ -11,6 +11,8 @@ const MONTHS = [
 ];
 const DOW = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
+type StaffOption = { id: number; name: string; role: string | null };
+
 type Props = {
   open: boolean;
   onClose: () => void;
@@ -25,6 +27,7 @@ type Props = {
     duration: number;
     status: string;
     notes: string | null;
+    staffId?: number | null;  // used to initialise the reassign dropdown
     staffName: string | null;
     paymentMethod: string | null;
     discountAmount: number;
@@ -36,6 +39,10 @@ type Props = {
   onRescheduleTimeChange: (time: string) => void;
   onReschedule: () => void;
   rescheduling: boolean;
+  // Staff reassignment (optional — omit to hide the section)
+  staffList?: StaffOption[];
+  onReassignStaff?: (appointmentId: number, staffId: number | null) => void;
+  reassigning?: boolean;
   // Status
   onStatusChange: (
     id: number,
@@ -61,21 +68,27 @@ export default function AppointmentDetailModal({
   onRescheduleTimeChange,
   onReschedule,
   rescheduling,
+  staffList,
+  onReassignStaff,
+  reassigning = false,
   onStatusChange,
   saving,
 }: Props) {
   const [paymentStep,   setPaymentStep]   = useState(false);
-  // null = user hasn't chosen yet — required before "Confirm complete" enables.
-  // This forces the salon to record how each appointment was paid so the daily
-  // reconciliation has accurate cash/card/transfer breakdowns.
   const [paymentMethod, setPaymentMethod] = useState<"cash" | "card" | "transfer" | null>(null);
   const [discount,      setDiscount]      = useState(0);
 
+  // Staff reassignment: tracks the selected staff in the dropdown.
+  // Initialised to the appointment's current staff when the modal opens.
+  const [reassignStaffId, setReassignStaffId] = useState<number | null>(null);
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (open) {
       setPaymentStep(false);
       setPaymentMethod(null);
       setDiscount(0);
+      setReassignStaffId(apt?.staffId ?? null);
     }
   }, [open]);
 
@@ -93,12 +106,15 @@ export default function AppointmentDetailModal({
   const rescheduleChanged =
     rescheduleDate !== apt.date || rescheduleTime !== apt.time;
 
+  const currentStaffId  = apt.staffId ?? null;
+  const reassignChanged = reassignStaffId !== currentStaffId;
+
   const netAmount = Math.max(0, apt.servicePrice - (paymentStep ? discount : apt.discountAmount));
 
-  // ── Payment step (opened when "Mark complete" is clicked) ─────────────────
+  // ── Payment step ──────────────────────────────────────────────────────────
 
   const handleConfirmComplete = () => {
-    if (!paymentMethod) return; // guard: button is also disabled below
+    if (!paymentMethod) return;
     onStatusChange(apt.id, "completed", { method: paymentMethod, discount });
     setPaymentStep(false);
   };
@@ -125,13 +141,15 @@ export default function AppointmentDetailModal({
     </span>
   );
 
-  // ── Payment method label (for completed display) ──────────────────────────
+  // ── Payment method label (completed view) ─────────────────────────────────
 
   const paymentLabel = apt.paymentMethod
     ? PAYMENT_METHODS.find(p => p.value === apt.paymentMethod)?.label ?? apt.paymentMethod
     : null;
 
   // ── Footer ────────────────────────────────────────────────────────────────
+
+  const anyBusy = saving || rescheduling || reassigning;
 
   const footer = paymentStep ? (
     <>
@@ -156,12 +174,12 @@ export default function AppointmentDetailModal({
           className="btn btn-ghost"
           style={{ marginRight: "auto", color: "#A53A2C" }}
           onClick={() => onStatusChange(apt.id, "cancelled")}
-          disabled={saving}
+          disabled={anyBusy}
         >
           Cancel appointment
         </button>
       )}
-      <button type="button" className="btn btn-ghost" onClick={onClose}>
+      <button type="button" className="btn btn-ghost" onClick={onClose} disabled={anyBusy}>
         Close
       </button>
       {isPending && (
@@ -169,7 +187,7 @@ export default function AppointmentDetailModal({
           type="button"
           className="btn btn-secondary"
           onClick={() => onStatusChange(apt.id, "confirmed")}
-          disabled={saving}
+          disabled={anyBusy}
         >
           Confirm
         </button>
@@ -179,13 +197,15 @@ export default function AppointmentDetailModal({
           type="button"
           className="btn btn-primary"
           onClick={() => setPaymentStep(true)}
-          disabled={saving}
+          disabled={anyBusy}
         >
           Mark complete
         </button>
       )}
     </>
   );
+
+  // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
     <Modal
@@ -225,7 +245,7 @@ export default function AppointmentDetailModal({
               </div>
             </div>
 
-            {/* Payment method — required choice */}
+            {/* Payment method — required */}
             <div>
               <div style={{ ...labelStyle, marginBottom: 8 }}>
                 Payment method <span style={{ color: "#A53A2C" }}>*</span>
@@ -308,9 +328,10 @@ export default function AppointmentDetailModal({
           </div>
         )}
 
-        {/* ── Date, time, status ── */}
+        {/* ── Main detail view ── */}
         {!paymentStep && (
           <>
+            {/* Date, time, status */}
             <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
               <div>
                 <div style={labelStyle}>Date &amp; time</div>
@@ -327,7 +348,7 @@ export default function AppointmentDetailModal({
               </div>
             </div>
 
-            {/* Staff */}
+            {/* Assigned staff (display) */}
             {apt.staffName && (
               <div>
                 <div style={labelStyle}>Assigned to</div>
@@ -335,7 +356,7 @@ export default function AppointmentDetailModal({
               </div>
             )}
 
-            {/* Payment info (completed appointments) */}
+            {/* Payment info (completed) */}
             {apt.status === "completed" && (paymentLabel || apt.discountAmount > 0) && (
               <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
                 {paymentLabel && (
@@ -376,42 +397,105 @@ export default function AppointmentDetailModal({
               </div>
             )}
 
-            {/* Reschedule — active only */}
+            {/* ── Reschedule + Reassign — active appointments only ── */}
             {isActive && (
-              <div style={{ borderTop: "1px solid var(--ink-100)", paddingTop: 20 }}>
-                <div style={labelStyle}>Reschedule</div>
-                <div style={{
-                  display: "flex",
-                  gap: 10,
-                  marginTop: 10,
-                  flexWrap: "wrap",
-                  alignItems: "center",
-                }}>
-                  <input
-                    type="date"
-                    value={rescheduleDate}
-                    onChange={(e) => onRescheduleDateChange(e.target.value)}
-                    style={inputStyle}
-                  />
-                  <input
-                    type="time"
-                    value={rescheduleTime}
-                    onChange={(e) => onRescheduleTimeChange(e.target.value)}
-                    style={inputStyle}
-                  />
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    style={{ fontSize: 13, padding: "9px 20px", flexShrink: 0 }}
-                    onClick={onReschedule}
-                    disabled={rescheduling || !rescheduleChanged}
-                  >
-                    {rescheduling ? "Rescheduling…" : "Reschedule"}
-                  </button>
+              <div style={{ borderTop: "1px solid var(--ink-100)", paddingTop: 20, display: "flex", flexDirection: "column", gap: 20 }}>
+
+                {/* Reschedule */}
+                <div>
+                  <div style={labelStyle}>Reschedule</div>
+                  <div style={{
+                    display: "flex",
+                    gap: 10,
+                    marginTop: 10,
+                    flexWrap: "wrap",
+                    alignItems: "center",
+                  }}>
+                    <input
+                      type="date"
+                      value={rescheduleDate}
+                      onChange={(e) => onRescheduleDateChange(e.target.value)}
+                      style={inputStyle}
+                    />
+                    <input
+                      type="time"
+                      value={rescheduleTime}
+                      onChange={(e) => onRescheduleTimeChange(e.target.value)}
+                      style={inputStyle}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      style={{ fontSize: 13, padding: "9px 20px", flexShrink: 0 }}
+                      onClick={onReschedule}
+                      disabled={rescheduling || !rescheduleChanged || reassigning}
+                    >
+                      {rescheduling ? "Rescheduling…" : "Reschedule"}
+                    </button>
+                  </div>
+                  {rescheduleChanged && (
+                    <div style={{ marginTop: 8, fontSize: 12, color: "var(--plum-700)", letterSpacing: "0.01em" }}>
+                      New time: {rescheduleDate} at {rescheduleTime} — click Reschedule to confirm.
+                    </div>
+                  )}
                 </div>
-                {rescheduleChanged && (
-                  <div style={{ marginTop: 8, fontSize: 12, color: "var(--plum-700)", letterSpacing: "0.01em" }}>
-                    New time: {rescheduleDate} at {rescheduleTime} — click Reschedule to confirm.
+
+                {/* Reassign staff — shown when parent passes a staffList */}
+                {staffList !== undefined && onReassignStaff && (
+                  <div>
+                    <div style={labelStyle}>
+                      Reassign staff
+                      {apt.staffName && (
+                        <span style={{
+                          textTransform: "none",
+                          letterSpacing: 0,
+                          fontWeight: 400,
+                          color: "var(--ink-400)",
+                          marginLeft: 6,
+                        }}>
+                          — currently {apt.staffName}
+                        </span>
+                      )}
+                    </div>
+                    <div style={{
+                      display: "flex",
+                      gap: 10,
+                      marginTop: 10,
+                      flexWrap: "wrap",
+                      alignItems: "center",
+                    }}>
+                      <select
+                        value={reassignStaffId ?? ""}
+                        onChange={(e) =>
+                          setReassignStaffId(e.target.value ? Number(e.target.value) : null)
+                        }
+                        style={{ ...inputStyle, flex: 1, minWidth: 160 }}
+                      >
+                        <option value="">Owner / unassigned</option>
+                        {staffList.map(s => (
+                          <option key={s.id} value={s.id}>
+                            {s.name}{s.role ? ` · ${s.role}` : ""}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ fontSize: 13, padding: "9px 20px", flexShrink: 0 }}
+                        onClick={() => onReassignStaff(apt.id, reassignStaffId)}
+                        disabled={reassigning || !reassignChanged || rescheduling}
+                      >
+                        {reassigning ? "Reassigning…" : "Reassign"}
+                      </button>
+                    </div>
+                    {reassignChanged && (
+                      <div style={{ marginTop: 8, fontSize: 12, color: "var(--plum-700)", letterSpacing: "0.01em" }}>
+                        Will assign to{" "}
+                        {reassignStaffId
+                          ? staffList.find(s => s.id === reassignStaffId)?.name ?? "selected staff"
+                          : "Owner / unassigned"} — click Reassign to confirm.
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

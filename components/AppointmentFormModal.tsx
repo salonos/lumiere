@@ -12,14 +12,23 @@ type ServiceOption  = { id: number; name: string; category: string; duration: nu
 type StaffOption    = { id: number; name: string; role: string | null };
 type StationOption  = { id: number; name: string; count: number };
 
+// One service line inside the booking form.
+// Each line carries its own staff assignment for accurate commission tracking.
+// `key` is a local React identifier — never sent to the DB.
+type ServiceLine = {
+  key:        string;
+  service_id: number;
+  duration:   number;
+  price:      number;
+  staff_id:   number | null;  // commission is per-service, so staff is per-line
+};
+
 type Draft = {
   customer_id: string;
-  service_id:  number;
+  services:    ServiceLine[];
   date:        string;
   time:        string;
   notes:       string;
-  duration:    number;
-  staff_id:    number | null;
 };
 
 type Props = {
@@ -41,15 +50,28 @@ function timeToMins(t: string): number {
   return h * 60 + m;
 }
 
+function minsToTime(mins: number): string {
+  const h = Math.floor(mins / 60) % 24;
+  const m = mins % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+let _keySeq = 0;
+function newKey(): string {
+  return `svc-${Date.now()}-${_keySeq++}`;
+}
+
+function blankService(): ServiceLine {
+  return { key: newKey(), service_id: 0, duration: 60, price: 0, staff_id: null };
+}
+
 function blankDraft(defaultCustomerId?: string): Draft {
   return {
     customer_id: defaultCustomerId ?? "",
-    service_id:  0,
+    services:    [blankService()],
     date:        todayIso(),
     time:        "09:00",
     notes:       "",
-    duration:    60,
-    staff_id:    null,
   };
 }
 
@@ -61,19 +83,19 @@ export default function AppointmentFormModal({
   onSave,
   defaultCustomerId,
 }: Props) {
-  // Data
-  const [customers,     setCustomers]     = useState<CustomerOption[]>([]);
-  const [services,      setServices]      = useState<ServiceOption[]>([]);
-  const [staffList,     setStaffList]     = useState<StaffOption[]>([]);
-  const [stationTypes,  setStationTypes]  = useState<StationOption[]>([]);
+  // Reference data
+  const [customers,    setCustomers]    = useState<CustomerOption[]>([]);
+  const [services,     setServices]     = useState<ServiceOption[]>([]);
+  const [staffList,    setStaffList]    = useState<StaffOption[]>([]);
+  const [stationTypes, setStationTypes] = useState<StationOption[]>([]);
 
   // Customer combobox
-  const [customerQuery,   setCustomerQuery]   = useState("");
+  const [customerQuery,    setCustomerQuery]    = useState("");
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerOption | null>(null);
-  const [showDropdown,    setShowDropdown]    = useState(false);
-  const [isNewCustomer,   setIsNewCustomer]   = useState(false);
-  const [newName,         setNewName]         = useState("");
-  const [newPhone,        setNewPhone]        = useState("");
+  const [showDropdown,     setShowDropdown]     = useState(false);
+  const [isNewCustomer,    setIsNewCustomer]    = useState(false);
+  const [newName,          setNewName]          = useState("");
+  const [newPhone,         setNewPhone]         = useState("");
   const comboRef = useRef<HTMLDivElement>(null);
 
   // Form
@@ -82,29 +104,33 @@ export default function AppointmentFormModal({
   const [saving,  setSaving]  = useState(false);
   const [error,   setError]   = useState<string | null>(null);
 
-  // Availability
-  const [avail,         setAvail]         = useState<{ ok: boolean; reason?: string } | null>(null);
+  // Station availability (one warning string per conflicted service)
+  const [stationIssues, setStationIssues] = useState<string[]>([]);
   const [checkingAvail, setCheckingAvail] = useState(false);
 
-  // Staff conflict
-  const [staffConflict,   setStaffConflict]   = useState<{ busy: boolean; name: string } | null>(null);
-  const [checkingStaff,   setCheckingStaff]   = useState(false);
+  // Per-service staff conflicts
+  const [staffIssues,   setStaffIssues]   = useState<string[]>([]);
+  const [checkingStaff, setCheckingStaff] = useState(false);
 
   // Customer conflict
-  const [customerConflict,   setCustomerConflict]   = useState<{ busy: boolean; name: string } | null>(null);
-  const [checkingCustomer,   setCheckingCustomer]   = useState(false);
+  const [customerConflict, setCustomerConflict] = useState<{ busy: boolean; name: string } | null>(null);
+  const [checkingCustomer, setCheckingCustomer] = useState(false);
+
+  // ── Derived totals ─────────────────────────────────────────────────────────
+
+  const totalDuration = draft.services.reduce((s, l) => s + l.duration, 0);
+  const totalPrice    = draft.services.reduce((s, l) => s + l.price, 0);
 
   // ── Load data on open ──────────────────────────────────────────────────────
 
   useEffect(() => {
     if (!open) return;
 
-    // Reset state
     setDraft(blankDraft(defaultCustomerId));
     setTouched(false);
     setError(null);
-    setAvail(null);
-    setStaffConflict(null);
+    setStationIssues([]);
+    setStaffIssues([]);
     setCustomerConflict(null);
     setIsNewCustomer(false);
     setNewName("");
@@ -114,20 +140,10 @@ export default function AppointmentFormModal({
 
     let cancelled = false;
     Promise.all([
-      supabase.from("customers")
-        .select("id, name, phone")
-        .order("name"),
-      supabase.from("services")
-        .select("*")
-        .order("category")
-        .order("name"),
-      supabase.from("staff")
-        .select("id, name, role")
-        .eq("active", true)
-        .order("name"),
-      supabase.from("station_types")
-        .select("id, name, count")
-        .order("name"),
+      supabase.from("customers").select("id, name, phone").order("name"),
+      supabase.from("services").select("*").order("category").order("name"),
+      supabase.from("staff").select("id, name, role").eq("active", true).order("name"),
+      supabase.from("station_types").select("id, name, count").order("name"),
     ]).then(([c, s, st, stn]) => {
       if (cancelled) return;
       setCustomers((c.data as CustomerOption[]) ?? []);
@@ -144,7 +160,6 @@ export default function AppointmentFormModal({
       setStaffList((st.data as StaffOption[]) ?? []);
       setStationTypes((stn.data as StationOption[]) ?? []);
 
-      // Pre-select customer if defaultCustomerId provided
       if (defaultCustomerId) {
         const found = (c.data as CustomerOption[] ?? []).find(x => x.id === defaultCustomerId);
         if (found) {
@@ -170,19 +185,53 @@ export default function AppointmentFormModal({
     return () => document.removeEventListener("mousedown", handler);
   }, [showDropdown]);
 
-  // ── Service selection ──────────────────────────────────────────────────────
+  // ── Service line mutations ─────────────────────────────────────────────────
 
-  const selectService = (id: number) => {
-    const svc = services.find(s => s.id === id);
-    setDraft(d => ({ ...d, service_id: id, duration: svc?.duration ?? 60 }));
-    setAvail(null);
+  const updateServiceLine = (key: string, serviceId: number) => {
+    const svc = services.find(s => s.id === serviceId);
+    setDraft(d => ({
+      ...d,
+      services: d.services.map(line =>
+        line.key === key
+          ? { ...line, service_id: serviceId, duration: svc?.duration ?? 60, price: svc?.price ?? 0 }
+          : line,
+      ),
+    }));
+    setStationIssues([]);
   };
 
-  // ── Availability check ─────────────────────────────────────────────────────
+  const updateServiceStaff = (key: string, staffId: number | null) => {
+    setDraft(d => ({
+      ...d,
+      services: d.services.map(line =>
+        line.key === key ? { ...line, staff_id: staffId } : line,
+      ),
+    }));
+  };
+
+  const addServiceLine = () => {
+    setDraft(d => ({ ...d, services: [...d.services, blankService()] }));
+  };
+
+  const removeServiceLine = (key: string) => {
+    setDraft(d => ({
+      ...d,
+      services: d.services.filter(l => l.key !== key),
+    }));
+    setStationIssues([]);
+    setStaffIssues([]);
+  };
+
+  // ── Station availability check ─────────────────────────────────────────────
+  // Each service checked against its sequential time slot.
+
+  // Stable dep key so the effect only fires when service/date/time actually changes
+  const svcAvailKey = draft.services.map(l => `${l.service_id}:${l.duration}`).join(",");
 
   useEffect(() => {
-    if (!draft.service_id || !draft.date || !draft.time) {
-      setAvail(null);
+    const selected = draft.services.filter(l => l.service_id > 0);
+    if (selected.length === 0 || !draft.date || !draft.time) {
+      setStationIssues([]);
       return;
     }
 
@@ -190,58 +239,61 @@ export default function AppointmentFormModal({
     setCheckingAvail(true);
 
     (async () => {
-      const svc = services.find(s => s.id === draft.service_id);
-      if (!svc?.station_type_id) {
-        // No station type → station always available
-        if (!cancelled) { setAvail({ ok: true }); setCheckingAvail(false); }
-        return;
-      }
+      const issues: string[] = [];
+      let cursor = timeToMins(draft.time);
 
-      const station = stationTypes.find(st => st.id === svc.station_type_id);
-      const limit   = station?.count ?? 1;
+      for (const line of selected) {
+        const svc = services.find(s => s.id === line.service_id);
+        if (!svc?.station_type_id) { cursor += line.duration; continue; }
 
-      // Services that use the same station type
-      const sameIds = services
-        .filter(s => s.station_type_id === svc.station_type_id)
-        .map(s => s.id);
+        const station = stationTypes.find(st => st.id === svc.station_type_id);
+        const limit   = station?.count ?? 1;
 
-      const { data: existing } = await supabase
-        .from("appointments")
-        .select("time, duration")
-        .eq("date", draft.date)
-        .in("service_id", sameIds)
-        .not("status", "eq", "cancelled");
+        const sameIds = services
+          .filter(s => s.station_type_id === svc.station_type_id)
+          .map(s => s.id);
 
-      if (cancelled) return;
+        const { data: existing } = await supabase
+          .from("appointments")
+          .select("time, duration")
+          .eq("date", draft.date)
+          .in("service_id", sameIds)
+          .not("status", "eq", "cancelled");
 
-      const ourStart = timeToMins(draft.time);
-      const ourEnd   = ourStart + draft.duration;
+        if (cancelled) return;
 
-      const conflicts = (existing ?? []).filter(a => {
-        const s = timeToMins(a.time as string);
-        const e = s + (a.duration as number);
-        return s < ourEnd && e > ourStart;
-      });
+        const ourStart = cursor;
+        const ourEnd   = cursor + line.duration;
 
-      if (conflicts.length >= limit) {
-        setAvail({
-          ok: false,
-          reason: `All ${limit} ${station?.name ?? "station"}${limit > 1 ? "s" : ""} are occupied at this time.`,
+        const conflicts = (existing ?? []).filter(a => {
+          const s = timeToMins(a.time as string);
+          const e = s + (a.duration as number);
+          return s < ourEnd && e > ourStart;
         });
-      } else {
-        setAvail({ ok: true });
+
+        if (conflicts.length >= limit) {
+          issues.push(
+            `All ${limit} ${station?.name ?? "station"}${limit > 1 ? "s" : ""} occupied for "${svc.name}".`,
+          );
+        }
+        cursor += line.duration;
       }
-      setCheckingAvail(false);
+
+      if (!cancelled) { setStationIssues(issues); setCheckingAvail(false); }
     })();
 
     return () => { cancelled = true; };
-  }, [draft.service_id, draft.date, draft.time, draft.duration, services, stationTypes]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [svcAvailKey, draft.date, draft.time, services, stationTypes]);
 
-  // ── Staff conflict check ───────────────────────────────────────────────────
+  // ── Per-service staff conflict check ──────────────────────────────────────
+
+  const staffDepsKey = draft.services.map(l => `${l.staff_id ?? "x"}:${l.duration}`).join(",");
 
   useEffect(() => {
-    if (!draft.staff_id || !draft.date || !draft.time) {
-      setStaffConflict(null);
+    const linesWithStaff = draft.services.filter(l => l.staff_id != null);
+    if (linesWithStaff.length === 0 || !draft.date || !draft.time) {
+      setStaffIssues([]);
       return;
     }
 
@@ -249,37 +301,52 @@ export default function AppointmentFormModal({
     setCheckingStaff(true);
 
     (async () => {
-      const { data } = await supabase
-        .from("appointments")
-        .select("time, duration")
-        .eq("date", draft.date)
-        .eq("staff_id", draft.staff_id)
-        .not("status", "eq", "cancelled");
+      const issues: string[] = [];
+      let cursor = timeToMins(draft.time);
 
-      if (cancelled) return;
+      for (const line of draft.services) {
+        const ourStart = cursor;
+        const ourEnd   = cursor + line.duration;
 
-      const ourStart = timeToMins(draft.time);
-      const ourEnd   = ourStart + draft.duration;
+        if (line.staff_id != null) {
+          const { data } = await supabase
+            .from("appointments")
+            .select("time, duration")
+            .eq("date", draft.date)
+            .eq("staff_id", line.staff_id)
+            .not("status", "eq", "cancelled");
 
-      const busy = (data ?? []).some((a) => {
-        const s = timeToMins(a.time as string);
-        const e = s + (a.duration as number);
-        return s < ourEnd && e > ourStart;
-      });
+          if (cancelled) return;
 
-      const staffName =
-        staffList.find((s) => s.id === draft.staff_id)?.name ?? "This staff member";
-      setStaffConflict({ busy, name: staffName });
-      setCheckingStaff(false);
+          const busy = (data ?? []).some((a) => {
+            const s = timeToMins(a.time as string);
+            const e = s + (a.duration as number);
+            return s < ourEnd && e > ourStart;
+          });
+
+          if (busy) {
+            const staffName = staffList.find(s => s.id === line.staff_id)?.name ?? "Staff";
+            const svcName   = services.find(s => s.id === line.service_id)?.name;
+            issues.push(
+              `${staffName} is already booked at ${minsToTime(ourStart)}` +
+              (svcName ? ` (${svcName})` : "") + ".",
+            );
+          }
+        }
+        cursor += line.duration;
+      }
+
+      if (!cancelled) { setStaffIssues(issues); setCheckingStaff(false); }
     })();
 
     return () => { cancelled = true; };
-  }, [draft.staff_id, draft.date, draft.time, draft.duration, staffList]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [staffDepsKey, draft.date, draft.time, staffList, services]);
 
   // ── Customer conflict check ────────────────────────────────────────────────
 
   useEffect(() => {
-    if (!draft.customer_id || !draft.date || !draft.time) {
+    if (!draft.customer_id || !draft.date || !draft.time || totalDuration === 0) {
       setCustomerConflict(null);
       return;
     }
@@ -298,7 +365,7 @@ export default function AppointmentFormModal({
       if (cancelled) return;
 
       const ourStart = timeToMins(draft.time);
-      const ourEnd   = ourStart + draft.duration;
+      const ourEnd   = ourStart + totalDuration;
 
       const busy = (data ?? []).some((a) => {
         const s = timeToMins(a.time as string);
@@ -306,14 +373,13 @@ export default function AppointmentFormModal({
         return s < ourEnd && e > ourStart;
       });
 
-      const custName =
-        customers.find((c) => c.id === draft.customer_id)?.name ?? "This customer";
+      const custName = customers.find((c) => c.id === draft.customer_id)?.name ?? "This customer";
       setCustomerConflict({ busy, name: custName });
       setCheckingCustomer(false);
     })();
 
     return () => { cancelled = true; };
-  }, [draft.customer_id, draft.date, draft.time, draft.duration, customers]);
+  }, [draft.customer_id, draft.date, draft.time, totalDuration, customers]);
 
   // ── Customer combobox actions ──────────────────────────────────────────────
 
@@ -357,13 +423,19 @@ export default function AppointmentFormModal({
     ? newName.trim().length > 0
     : draft.customer_id.length > 0;
 
+  const servicesReady =
+    draft.services.length > 0 &&
+    draft.services.every(l => l.service_id > 0);
+
   const valid =
     customerReady &&
-    draft.service_id > 0 &&
+    servicesReady &&
     draft.date.length > 0 &&
     draft.time.length > 0;
 
   // ── Submit ─────────────────────────────────────────────────────────────────
+  // Creates one appointment row per service with sequential start times.
+  // Each row carries its own staff_id for commission tracking.
 
   const submit = async () => {
     setTouched(true);
@@ -373,7 +445,6 @@ export default function AppointmentFormModal({
 
     let customerId = draft.customer_id;
 
-    // Create new customer if needed
     if (isNewCustomer) {
       const { data: newCust, error: custErr } = await supabase
         .from("customers")
@@ -389,16 +460,24 @@ export default function AppointmentFormModal({
       customerId = (newCust as { id: string }).id;
     }
 
-    const { error: err } = await supabase.from("appointments").insert({
-      customer_id: customerId,
-      service_id:  draft.service_id,
-      date:        draft.date,
-      time:        draft.time,
-      duration:    draft.duration,
-      status:      "confirmed",
-      notes:       draft.notes.trim() || null,
-      staff_id:    draft.staff_id || null,
-    });
+    const rows: Record<string, unknown>[] = [];
+    let cursor = timeToMins(draft.time);
+
+    for (const line of draft.services) {
+      rows.push({
+        customer_id: customerId,
+        service_id:  line.service_id,
+        date:        draft.date,
+        time:        minsToTime(cursor),
+        duration:    line.duration,
+        status:      "confirmed",
+        notes:       draft.notes.trim() || null,
+        staff_id:    line.staff_id,
+      });
+      cursor += line.duration;
+    }
+
+    const { error: err } = await supabase.from("appointments").insert(rows);
 
     setSaving(false);
     if (err) {
@@ -411,8 +490,10 @@ export default function AppointmentFormModal({
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
-  const selectedSvc   = services.find(s => s.id === draft.service_id);
-  const selectedStnId = selectedSvc?.station_type_id;
+  const hasStationConflict = stationIssues.length > 0;
+  const hasStaffConflict   = staffIssues.length > 0;
+  const categories = Array.from(new Set(services.map(s => s.category)));
+  const filledServices = draft.services.filter(l => l.service_id > 0);
 
   return (
     <Modal
@@ -430,7 +511,13 @@ export default function AppointmentFormModal({
             type="button"
             className="btn btn-primary"
             onClick={submit}
-            disabled={saving || (touched && !valid) || (avail?.ok === false) || !!staffConflict?.busy || !!customerConflict?.busy}
+            disabled={
+              saving ||
+              (touched && !valid) ||
+              hasStationConflict ||
+              hasStaffConflict ||
+              !!customerConflict?.busy
+            }
           >
             {saving ? "Saving…" : "Book appointment"}
           </button>
@@ -455,7 +542,6 @@ export default function AppointmentFormModal({
         <div className="field">
           <label>Customer</label>
 
-          {/* Selected customer chip */}
           {(selectedCustomer || isNewCustomer) ? (
             <div style={{
               display: "flex",
@@ -479,13 +565,8 @@ export default function AppointmentFormModal({
                 type="button"
                 onClick={clearCustomer}
                 style={{
-                  background: "none",
-                  border: "none",
-                  cursor: "pointer",
-                  color: "var(--ink-500)",
-                  padding: "0 2px",
-                  lineHeight: 1,
-                  fontSize: 16,
+                  background: "none", border: "none", cursor: "pointer",
+                  color: "var(--ink-500)", padding: "0 2px", lineHeight: 1, fontSize: 16,
                 }}
                 aria-label="Clear customer"
               >
@@ -493,25 +574,20 @@ export default function AppointmentFormModal({
               </button>
             </div>
           ) : (
-            /* Search input + dropdown */
             <div ref={comboRef} style={{ position: "relative" }}>
               <input
                 type="text"
                 placeholder="Search by name or phone…"
                 value={customerQuery}
                 autoComplete="off"
-                onChange={(e) => {
-                  setCustomerQuery(e.target.value);
-                  setShowDropdown(true);
-                }}
+                onChange={(e) => { setCustomerQuery(e.target.value); setShowDropdown(true); }}
                 onFocus={() => setShowDropdown(true)}
               />
               {showDropdown && (
                 <div style={{
                   position: "absolute",
                   top: "calc(100% + 4px)",
-                  left: 0,
-                  right: 0,
+                  left: 0, right: 0,
                   background: "var(--white)",
                   border: "1px solid var(--ink-100)",
                   borderRadius: 12,
@@ -520,30 +596,20 @@ export default function AppointmentFormModal({
                   maxHeight: 240,
                   overflowY: "auto",
                 }}>
-                  {/* New customer always first */}
                   <button
                     type="button"
                     onMouseDown={(e) => { e.preventDefault(); pickNewCustomer(); }}
                     style={{
-                      width: "100%",
-                      textAlign: "left",
-                      padding: "10px 14px",
-                      border: "none",
-                      borderBottom: "1px solid var(--ink-100)",
-                      background: "transparent",
-                      cursor: "pointer",
-                      fontSize: 13,
-                      color: "var(--plum-700)",
-                      fontWeight: 500,
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 6,
+                      width: "100%", textAlign: "left", padding: "10px 14px",
+                      border: "none", borderBottom: "1px solid var(--ink-100)",
+                      background: "transparent", cursor: "pointer",
+                      fontSize: 13, color: "var(--plum-700)", fontWeight: 500,
+                      display: "flex", alignItems: "center", gap: 6,
                     }}
                   >
                     <span style={{ fontSize: 15, lineHeight: 1 }}>+</span>
                     New customer
                   </button>
-
                   {filteredCustomers.length === 0 ? (
                     <div style={{ padding: "12px 14px", fontSize: 13, color: "var(--ink-400)" }}>
                       No customers match — or add them as new.
@@ -555,15 +621,9 @@ export default function AppointmentFormModal({
                         type="button"
                         onMouseDown={(e) => { e.preventDefault(); pickCustomer(c); }}
                         style={{
-                          width: "100%",
-                          textAlign: "left",
-                          padding: "9px 14px",
-                          border: "none",
-                          background: "transparent",
-                          cursor: "pointer",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 12,
+                          width: "100%", textAlign: "left", padding: "9px 14px",
+                          border: "none", background: "transparent", cursor: "pointer",
+                          display: "flex", alignItems: "center", gap: 12,
                         }}
                       >
                         <div style={{ flex: 1 }}>
@@ -594,21 +654,15 @@ export default function AppointmentFormModal({
         {/* Inline new customer fields */}
         {isNewCustomer && (
           <div style={{
-            marginTop: -8,
-            marginBottom: 16,
+            marginTop: -8, marginBottom: 16,
             padding: "14px 16px",
-            background: "var(--cream)",
-            borderRadius: 10,
-            border: "1px solid var(--ink-100)",
-            display: "flex",
-            flexDirection: "column",
-            gap: 10,
+            background: "var(--cream)", borderRadius: 10, border: "1px solid var(--ink-100)",
+            display: "flex", flexDirection: "column", gap: 10,
           }}>
             <div className="field" style={{ margin: 0 }}>
               <label htmlFor="nc-name">Name</label>
               <input
-                id="nc-name"
-                type="text"
+                id="nc-name" type="text"
                 placeholder="Customer's full name"
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
@@ -628,8 +682,7 @@ export default function AppointmentFormModal({
                 </span>
               </label>
               <input
-                id="nc-phone"
-                type="tel"
+                id="nc-phone" type="tel"
                 placeholder="077 000 0000"
                 value={newPhone}
                 onChange={(e) => setNewPhone(e.target.value)}
@@ -638,20 +691,15 @@ export default function AppointmentFormModal({
           </div>
         )}
 
-        {/* ── Customer conflict feedback ── */}
+        {/* Customer conflict */}
         {draft.customer_id && draft.date && draft.time && (
           <div style={{ marginTop: -8, marginBottom: 16 }}>
             {checkingCustomer ? (
-              <div style={{ fontSize: 12, color: "var(--ink-400)" }}>
-                Checking customer availability…
-              </div>
+              <div style={{ fontSize: 12, color: "var(--ink-400)" }}>Checking customer availability…</div>
             ) : customerConflict?.busy ? (
               <div style={{
-                padding: "9px 13px",
-                background: "#FEF2F2",
-                borderRadius: 8,
-                fontSize: 12,
-                color: "#A53A2C",
+                padding: "9px 13px", background: "#FEF2F2",
+                borderRadius: 8, fontSize: 12, color: "#A53A2C",
               }}>
                 ⚠ {customerConflict.name} already has an appointment at this time.
               </div>
@@ -659,112 +707,223 @@ export default function AppointmentFormModal({
           </div>
         )}
 
-        {/* ── Service ── */}
+        {/* ── Services ── */}
         <div className="field">
-          <label htmlFor="apt-service">Service</label>
-          <select
-            id="apt-service"
-            value={draft.service_id || ""}
-            onChange={(e) => selectService(Number(e.target.value))}
+          <label>Services</label>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {draft.services.map((line, idx) => {
+              const selectedSvc   = services.find(s => s.id === line.service_id);
+              const selectedStnId = selectedSvc?.station_type_id;
+
+              // Sequential start time for this service
+              const lineStartMins = timeToMins(draft.time) +
+                draft.services.slice(0, idx).reduce((s, l) => s + l.duration, 0);
+              const lineStartLabel = (idx > 0 && draft.time) ? minsToTime(lineStartMins) : null;
+
+              return (
+                <div
+                  key={line.key}
+                  style={{
+                    display: "flex",
+                    gap: 8,
+                    alignItems: "flex-start",
+                    ...(idx > 0 ? {
+                      background: "var(--cream)",
+                      borderRadius: 10,
+                      padding: "12px 12px",
+                      border: "1px solid var(--ink-100)",
+                    } : {}),
+                  }}
+                >
+                  <div style={{ flex: 1 }}>
+                    {lineStartLabel && (
+                      <div style={{
+                        fontSize: 11,
+                        color: "var(--plum-600)",
+                        letterSpacing: "0.04em",
+                        textTransform: "uppercase",
+                        marginBottom: 6,
+                        fontWeight: 500,
+                      }}>
+                        Service {idx + 1} · starts at {lineStartLabel}
+                      </div>
+                    )}
+
+                    {/* Service dropdown */}
+                    <select
+                      value={line.service_id || ""}
+                      onChange={(e) => updateServiceLine(line.key, Number(e.target.value))}
+                    >
+                      <option value="">Select a service…</option>
+                      {categories.map(cat => (
+                        <optgroup key={cat} label={cat}>
+                          {services.filter(s => s.category === cat).map(s => (
+                            <option key={s.id} value={s.id}>
+                              {s.name} · {s.duration} min{s.price ? ` · LKR ${s.price.toLocaleString()}` : ""}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </select>
+
+                    {selectedStnId != null && (
+                      <div style={{ marginTop: 4, fontSize: 12, color: "var(--ink-500)", letterSpacing: "0.02em" }}>
+                        Uses:{" "}
+                        <strong style={{ color: "var(--ink-700)", fontWeight: 500 }}>
+                          {stationTypes.find(st => st.id === selectedStnId)?.name ?? "station"}
+                        </strong>
+                      </div>
+                    )}
+
+                    {/* Per-service staff assignment */}
+                    {staffList.length > 0 && (
+                      <div style={{ marginTop: 8 }}>
+                        <div style={{
+                          fontSize: 10,
+                          letterSpacing: "0.06em",
+                          textTransform: "uppercase",
+                          color: "var(--ink-400)",
+                          marginBottom: 4,
+                        }}>
+                          Staff{" "}
+                          <span style={{
+                            textTransform: "none",
+                            letterSpacing: 0,
+                            fontWeight: 400,
+                            color: "var(--ink-400)",
+                          }}>
+                            — for commission
+                          </span>
+                        </div>
+                        <select
+                          value={line.staff_id ?? ""}
+                          onChange={(e) =>
+                            updateServiceStaff(line.key, e.target.value ? Number(e.target.value) : null)
+                          }
+                          style={{ fontSize: 13 }}
+                        >
+                          <option value="">Owner / unassigned</option>
+                          {staffList.map(s => (
+                            <option key={s.id} value={s.id}>
+                              {s.name}{s.role ? ` · ${s.role}` : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Remove button */}
+                  {draft.services.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => removeServiceLine(line.key)}
+                      style={{
+                        background: "none", border: "none", cursor: "pointer",
+                        color: "var(--ink-400)", fontSize: 18, lineHeight: 1,
+                        padding: "6px 4px",
+                        marginTop: idx > 0 ? 20 : 6,
+                        flexShrink: 0,
+                      }}
+                      aria-label="Remove service"
+                      title="Remove this service"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Add another service */}
+          <button
+            type="button"
+            onClick={addServiceLine}
+            style={{
+              marginTop: 10,
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+              width: "100%",
+              background: "none",
+              border: "1px dashed var(--ink-200)",
+              borderRadius: 8,
+              padding: "8px 14px",
+              cursor: "pointer",
+              fontSize: 13,
+              color: "var(--plum-700)",
+              fontWeight: 500,
+              fontFamily: "inherit",
+            }}
           >
-            <option value="">Select a service…</option>
-            {Array.from(new Set(services.map(s => s.category))).map(cat => (
-              <optgroup key={cat} label={cat}>
-                {services.filter(s => s.category === cat).map(s => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} · {s.duration} min{s.price ? ` · LKR ${s.price.toLocaleString()}` : ""}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
-          {touched && !draft.service_id && (
+            <span style={{ fontSize: 15, lineHeight: 1 }}>+</span>
+            Add another service
+          </button>
+
+          {touched && !servicesReady && (
             <div style={{ marginTop: 8, fontSize: 12, color: "#A53A2C" }}>
-              Please select a service.
-            </div>
-          )}
-          {/* Station type badge */}
-          {selectedStnId != null && (
-            <div style={{ marginTop: 6, fontSize: 12, color: "var(--ink-500)", letterSpacing: "0.02em" }}>
-              Uses:{" "}
-              <strong style={{ color: "var(--ink-700)", fontWeight: 500 }}>
-                {stationTypes.find(st => st.id === selectedStnId)?.name ?? "station"}
-              </strong>
+              Please select a service for each row, or remove empty rows.
             </div>
           )}
         </div>
 
-        {/* ── Availability feedback ── */}
-        {draft.service_id > 0 && draft.date && draft.time && (
+        {/* Total summary */}
+        {filledServices.length > 0 && (
+          <div style={{
+            marginTop: -4, marginBottom: 16,
+            display: "flex", justifyContent: "space-between", alignItems: "center",
+            padding: "10px 14px",
+            background: "var(--cream)", borderRadius: 8,
+            fontSize: 13,
+          }}>
+            <div style={{ color: "var(--ink-500)" }}>
+              {filledServices.length} service{filledServices.length > 1 ? "s" : ""} · {totalDuration} min total
+            </div>
+            <div style={{ fontWeight: 600, color: "var(--ink-900)" }}>
+              LKR {totalPrice.toLocaleString()}
+            </div>
+          </div>
+        )}
+
+        {/* Station availability feedback */}
+        {filledServices.length > 0 && draft.date && draft.time && (
           <div style={{ marginTop: -8, marginBottom: 16 }}>
             {checkingAvail ? (
-              <div style={{ fontSize: 12, color: "var(--ink-400)" }}>Checking availability…</div>
-            ) : avail?.ok === false ? (
+              <div style={{ fontSize: 12, color: "var(--ink-400)" }}>Checking station availability…</div>
+            ) : hasStationConflict ? (
               <div style={{
-                padding: "9px 13px",
-                background: "#FEF2F2",
-                borderRadius: 8,
-                fontSize: 12,
-                color: "#A53A2C",
+                padding: "9px 13px", background: "#FEF2F2",
+                borderRadius: 8, fontSize: 12, color: "#A53A2C",
+                display: "flex", flexDirection: "column", gap: 4,
               }}>
-                ⚠ {avail.reason}
+                {stationIssues.map((issue, i) => <div key={i}>⚠ {issue}</div>)}
               </div>
-            ) : avail?.ok === true && selectedStnId != null ? (
-              <div style={{ fontSize: 12, color: "#1F6B3A" }}>
-                ✓ Station available
-              </div>
+            ) : filledServices.some(l => services.find(s => s.id === l.service_id)?.station_type_id != null) ? (
+              <div style={{ fontSize: 12, color: "#1F6B3A" }}>✓ All stations available</div>
             ) : null}
           </div>
         )}
 
-        {/* ── Staff (optional) ── */}
-        {staffList.length > 0 && (
-          <div className="field">
-            <label htmlFor="apt-staff">
-              Assigned staff{" "}
-              <span style={{ fontWeight: 400, color: "var(--ink-500)", textTransform: "none", letterSpacing: 0 }}>
-                (optional — leave blank if owner will do it)
-              </span>
-            </label>
-            <select
-              id="apt-staff"
-              value={draft.staff_id ?? ""}
-              onChange={(e) =>
-                setDraft(d => ({ ...d, staff_id: e.target.value ? Number(e.target.value) : null }))
-              }
-            >
-              <option value="">Owner / unassigned</option>
-              {staffList.map(s => (
-                <option key={s.id} value={s.id}>
-                  {s.name}{s.role ? ` · ${s.role}` : ""}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        {/* ── Staff conflict feedback ── */}
-        {draft.staff_id && draft.date && draft.time && (
+        {/* Staff conflict feedback */}
+        {filledServices.some(l => l.staff_id != null) && draft.date && draft.time && (
           <div style={{ marginTop: -8, marginBottom: 16 }}>
             {checkingStaff ? (
-              <div style={{ fontSize: 12, color: "var(--ink-400)" }}>
-                Checking staff availability…
-              </div>
-            ) : staffConflict?.busy ? (
+              <div style={{ fontSize: 12, color: "var(--ink-400)" }}>Checking staff availability…</div>
+            ) : hasStaffConflict ? (
               <div style={{
-                padding: "9px 13px",
-                background: "#FEF2F2",
-                borderRadius: 8,
-                fontSize: 12,
-                color: "#A53A2C",
+                padding: "9px 13px", background: "#FEF2F2",
+                borderRadius: 8, fontSize: 12, color: "#A53A2C",
+                display: "flex", flexDirection: "column", gap: 4,
               }}>
-                ⚠ {staffConflict.name} is already booked during this time.
+                {staffIssues.map((issue, i) => <div key={i}>⚠ {issue}</div>)}
               </div>
-            ) : staffConflict && !staffConflict.busy ? (
+            ) : (
               <div style={{ fontSize: 12, color: "#1F6B3A" }}>
-                ✓ {staffConflict.name} is free at this time
+                ✓ {filledServices.filter(l => l.staff_id != null).length === 1
+                  ? `${staffList.find(s => s.id === filledServices.find(l => l.staff_id != null)?.staff_id)?.name ?? "Staff"} is free at this time`
+                  : "All assigned staff are free at this time"}
               </div>
-            ) : null}
+            )}
           </div>
         )}
 
@@ -780,7 +939,7 @@ export default function AppointmentFormModal({
             />
           </div>
           <div className="field">
-            <label htmlFor="apt-time">Time</label>
+            <label htmlFor="apt-time">Start time</label>
             <input
               id="apt-time"
               type="time"

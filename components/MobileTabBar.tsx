@@ -20,7 +20,9 @@ function deriveActive(pathname: string): TabKey | undefined {
     pathname.startsWith("/settings") ||
     pathname.startsWith("/services") ||
     pathname.startsWith("/reminders") ||
-    pathname.startsWith("/reports")
+    pathname.startsWith("/reports") ||
+    pathname.startsWith("/expenses") ||
+    pathname.startsWith("/payroll")
   ) {
     return "more";
   }

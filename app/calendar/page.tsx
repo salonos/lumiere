@@ -526,10 +526,11 @@ export default function CalendarPage() {
   const [rescheduleDate, setRescheduleDate] = useState("");
   const [rescheduleTime, setRescheduleTime] = useState("");
   const [rescheduling,   setRescheduling]   = useState(false);
-  const [savingId,   setSavingId]   = useState<number | null>(null);
-  const [toast,      setToast]      = useState<string | null>(null);
-  const [toastTone,  setToastTone]  = useState<ToastTone>("info");
-  const [aptsLoading,setAptsLoading]= useState(true);
+  const [savingId,     setSavingId]     = useState<number | null>(null);
+  const [reassigning,  setReassigning]  = useState(false);
+  const [toast,        setToast]        = useState<string | null>(null);
+  const [toastTone,    setToastTone]    = useState<ToastTone>("info");
+  const [aptsLoading,  setAptsLoading]  = useState(true);
 
   const showError   = (msg: string) => { setToastTone("error");   setToast(msg); };
   const showSuccess = (msg: string) => { setToastTone("success"); setToast(msg); };
@@ -839,6 +840,32 @@ export default function CalendarPage() {
     );
   }, [fetchApts]);
 
+  // ── Staff reassignment ────────────────────────────────────────────────────
+
+  const handleReassignStaff = useCallback(async (aptId: number, staffId: number | null) => {
+    setReassigning(true);
+
+    const { error } = await supabase
+      .from("appointments")
+      .update({ staff_id: staffId })
+      .eq("id", aptId);
+
+    setReassigning(false);
+
+    if (error) {
+      showError(humanError(error, "We couldn't reassign that appointment. Try again in a moment."));
+      return;
+    }
+
+    const staffLabel = staffId
+      ? staffCols.find((c) => c.id === staffId)?.name ?? "staff"
+      : "Owner / unassigned";
+
+    setDetailApt(null);
+    fetchApts();
+    showSuccess(`Reassigned to ${staffLabel}`);
+  }, [staffCols, fetchApts]);
+
   const events = apts.map(aptToEvent);
 
   const businessHours = Object.entries(openingHours)
@@ -994,6 +1021,7 @@ export default function CalendarPage() {
         onClose={() => setDetailApt(null)}
         appointment={detailApt ? {
           ...detailApt,
+          staffId:        detailApt.staffId,
           staffName:      detailApt.staffName,
           paymentMethod:  detailApt.paymentMethod,
           discountAmount: detailApt.discountAmount,
@@ -1004,6 +1032,11 @@ export default function CalendarPage() {
         onRescheduleTimeChange={setRescheduleTime}
         onReschedule={doReschedule}
         rescheduling={rescheduling}
+        staffList={staffCols
+          .filter((c) => c.id !== null)
+          .map((c) => ({ id: c.id as number, name: c.name, role: null }))}
+        onReassignStaff={handleReassignStaff}
+        reassigning={reassigning}
         onStatusChange={(id, newStatus, payment) => {
           const apt = apts.find((a) => a.id === id);
           if (apt) changeStatus(apt, newStatus, payment);
