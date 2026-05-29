@@ -5,7 +5,7 @@ import Link from "next/link";
 import Sidebar from "@/components/Sidebar";
 import MobileTopBar from "@/components/MobileTopBar";
 import MobileTabBar from "@/components/MobileTabBar";
-import { lkr } from "@/lib/data";
+import { lkr, appointmentBase, addonTotalsByAppointment } from "@/lib/data";
 import { supabase } from "@/lib/supabase";
 
 type RangeKey = "month" | "quarter" | "year";
@@ -121,18 +121,19 @@ async function fetchReports(range: RangeKey): Promise<ReportData> {
   const { start, end, prevStart, prevEnd } = getRangeBounds(range);
 
   // Run all queries; some may fail if optional migrations haven't been applied yet.
-  const [currRes, prevRes, priorRes, commRes] = await Promise.all([
-    // Current period — use * so missing columns (payment_method, discount_amount) don't break the query
+  const [currRes, prevRes, priorRes] = await Promise.all([
+    // Current period — * carries quantity/variant_price/discount; join name, price,
+    // commission_rate (for staff commissions) and staff (id, name).
     supabase
       .from("appointments")
-      .select("*, customers(name), services(name, price)")
+      .select("*, customers(name), services(name, price, commission_rate), staff(id, name)")
       .gte("date", start)
       .lte("date", end),
 
-    // Previous period — just service price for revenue delta
+    // Previous period — enough to compute effective revenue for the delta
     supabase
       .from("appointments")
-      .select("status, services(price)")
+      .select("id, status, quantity, variant_price, services(price)")
       .gte("date", prevStart)
       .lte("date", prevEnd),
 
@@ -141,42 +142,44 @@ async function fetchReports(range: RangeKey): Promise<ReportData> {
       .from("appointments")
       .select("customer_id")
       .lt("date", start),
-
-    // Commission: completed appointments with staff + service commission_rate
-    // May fail pre-migration — handled gracefully below
-    supabase
-      .from("appointments")
-      .select("*, staff(id, name), services(price, commission_rate)")
-      .eq("status", "completed")
-      .gte("date", start)
-      .lte("date", end),
   ]);
 
-  const currRaw  = currRes.data;
-  const prevRaw  = prevRes.data;
-  const priorRaw = priorRes.data;
-  // For commissions, only use rows that actually have a non-null staff_id
-  const commRaw  = commRes.error ? null : (commRes.data ?? []).filter(
-    (r: Record<string, unknown>) => r.staff_id != null,
-  );
+  const curr  = currRes.data  ?? [];
+  const prev  = prevRes.data  ?? [];
+  const prior = priorRes.data ?? [];
 
-  const curr  = currRaw  ?? [];
-  const prev  = prevRaw  ?? [];
-  const prior = priorRaw ?? [];
-  const comm  = commRaw  ?? [];
+  // ── Add-on totals (one query for both periods) ──
+  type IdRow = { id?: number | null };
+  const addonIds = [...(curr as IdRow[]), ...(prev as IdRow[])]
+    .map((r) => r.id)
+    .filter((id): id is number => id != null);
 
-  // ── Revenue ──
-  type AptRow = { status: string; customer_id?: string; customers?: unknown; services?: unknown };
+  let addonMap = new Map<number, number>();
+  if (addonIds.length > 0) {
+    const { data: addonRows, error } = await supabase
+      .from("appointment_addons")
+      .select("appointment_id, price, quantity")
+      .in("appointment_id", addonIds);
+    if (!error) addonMap = addonTotalsByAppointment(addonRows);
+  }
+
+  // ── Effective price = (variant_price ?? price) × qty + add-ons ──
+  type AptRow = {
+    id?: number | null; status: string; date?: string; customer_id?: string;
+    quantity?: number | null; variant_price?: number | null;
+    payment_method?: string | null; discount_amount?: number;
+    customers?: unknown; staff_id?: number | null; staff?: unknown;
+    services?: { name?: string; price?: number | null; commission_rate?: number } | null;
+  };
+  const effective = (a: AptRow) =>
+    appointmentBase(a) + (a.id != null ? addonMap.get(a.id) ?? 0 : 0);
 
   const completed = (curr as AptRow[]).filter((a) => a.status === "completed");
 
-  const price = (a: AptRow) =>
-    ((a.services as { price?: number } | null)?.price ?? 0);
-
-  const revenue     = completed.reduce((s, a) => s + price(a), 0);
+  const revenue     = completed.reduce((s, a) => s + effective(a), 0);
   const prevRevenue = (prev as AptRow[])
     .filter((a) => a.status === "completed")
-    .reduce((s, a) => s + price(a), 0);
+    .reduce((s, a) => s + effective(a), 0);
 
   // ── Counts ──
   const totalApts     = curr.length;
@@ -184,7 +187,7 @@ async function fetchReports(range: RangeKey): Promise<ReportData> {
   const cancelledApts = (curr as AptRow[]).filter((a) => a.status === "cancelled").length;
   const cancelledRevenue = (curr as AptRow[])
     .filter((a) => a.status === "cancelled")
-    .reduce((s, a) => s + price(a), 0);
+    .reduce((s, a) => s + effective(a), 0);
 
   // ── New customers ──
   const priorIds = new Set((prior as AptRow[]).map((a) => a.customer_id));
@@ -194,9 +197,9 @@ async function fetchReports(range: RangeKey): Promise<ReportData> {
   // ── Top services ──
   const svcMap = new Map<string, TopService>();
   for (const a of completed) {
-    const svc  = a.services as { name?: string; price?: number } | null;
+    const svc  = a.services as { name?: string } | null;
     const name = svc?.name  ?? "Unknown";
-    const p    = svc?.price ?? 0;
+    const p    = effective(a);
     const ex   = svcMap.get(name) ?? { name, bookings: 0, revenue: 0 };
     svcMap.set(name, { name, bookings: ex.bookings + 1, revenue: ex.revenue + p });
   }
@@ -209,7 +212,7 @@ async function fetchReports(range: RangeKey): Promise<ReportData> {
   for (const a of completed) {
     const id   = a.customer_id ?? "";
     const name = (a.customers as { name?: string } | null)?.name ?? "Customer";
-    const p    = price(a);
+    const p    = effective(a);
     const ex   = custMap.get(id) ?? { id, name, visits: 0, spend: 0 };
     custMap.set(id, { id, name, visits: ex.visits + 1, spend: ex.spend + p });
   }
@@ -220,10 +223,10 @@ async function fetchReports(range: RangeKey): Promise<ReportData> {
   // ── Revenue trend — uses the same completed set as the selected period ──
   const trendBuckets = getTrendBuckets(range);
   const trendRevMap  = new Map<string, number>();
-  for (const a of completed as (AptRow & { date?: string })[]) {
+  for (const a of completed) {
     if (!a.date) continue;
     const key = range === "month" ? weekKeyFromDate(a.date) : a.date.slice(0, 7);
-    const p   = price(a);
+    const p   = effective(a);
     trendRevMap.set(key, (trendRevMap.get(key) ?? 0) + p);
   }
   const revenueByMonth = trendBuckets.map(({ label, key }) => ({
@@ -231,16 +234,15 @@ async function fetchReports(range: RangeKey): Promise<ReportData> {
     value: trendRevMap.get(key) ?? 0,
   }));
 
-  // ── Staff commissions ──
+  // ── Staff commissions — only completed appointments with a staff member ──
   const commMap = new Map<number, StaffCommission>();
-  for (const a of comm as { staff_id: number; staff?: unknown; services?: unknown }[]) {
+  for (const a of completed.filter((a) => a.staff_id != null)) {
     const staffRow = a.staff as { id?: number; name?: string } | null;
-    const svcRow   = a.services as { price?: number; commission_rate?: number } | null;
-    const staffId  = staffRow?.id ?? a.staff_id;
+    const svcRow   = a.services as { commission_rate?: number } | null;
+    const staffId  = staffRow?.id ?? (a.staff_id as number);
     const name     = staffRow?.name ?? "Unknown";
-    const price    = svcRow?.price ?? 0;
     const rate     = svcRow?.commission_rate ?? 0;
-    const earned   = price * rate / 100;
+    const earned   = effective(a) * rate / 100;
     if (earned <= 0) continue;
     const ex = commMap.get(staffId) ?? { id: staffId, name, bookings: 0, commission: 0 };
     commMap.set(staffId, { ...ex, bookings: ex.bookings + 1, commission: ex.commission + earned });
@@ -248,10 +250,9 @@ async function fetchReports(range: RangeKey): Promise<ReportData> {
   const staffCommissions = [...commMap.values()].sort((a, b) => b.commission - a.commission);
 
   // ── Payment breakdown ──
-  type CurrRow = { status: string; payment_method?: string | null; discount_amount?: number; services?: unknown };
   const breakdown: PaymentBreakdown = { cash: 0, card: 0, transfer: 0, unrecorded: 0 };
-  for (const a of completed as CurrRow[]) {
-    const net = price(a as AptRow) - (a.discount_amount ?? 0);
+  for (const a of completed) {
+    const net = Math.max(0, effective(a) - (a.discount_amount ?? 0));
     const key = (a.payment_method ?? "unrecorded") as keyof PaymentBreakdown;
     breakdown[key] = (breakdown[key] ?? 0) + net;
   }

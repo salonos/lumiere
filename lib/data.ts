@@ -63,6 +63,44 @@ export const CATEGORY_BLURB: Record<ServiceCategory, string> = {
   Wax:       "Smooth, clean, and confident",
 };
 
+// ── Revenue helpers (effective pricing) ────────────────────────────────────
+//
+//  An appointment's charge is NOT just services.price. Since the catalogue
+//  extension, a booking can carry a tier (variant_price), a quantity (per-unit
+//  pricing like "per nail"), and stacked add-ons (appointment_addons rows).
+//
+//  The single source of truth for "what did this appointment cost" is:
+//
+//      (variant_price ?? service.price) × quantity   +   Σ add-on.price × qty
+//      └────────── appointmentBase(row) ───────────┘     └─ add-on totals ─┘
+//
+//  Every revenue / commission / income figure in the app MUST use these two
+//  helpers so the numbers agree across calendar, reports, payroll and expenses.
+
+/** Per-appointment base charge before add-ons: (variant_price ?? price) × quantity. */
+export function appointmentBase(row: {
+  quantity?: number | null;
+  variant_price?: number | null;
+  services?: { price?: number | null } | null;
+}): number {
+  const unit = row.variant_price ?? row.services?.price ?? 0;
+  const qty  = row.quantity ?? 1;
+  return unit * (qty > 0 ? qty : 1);
+}
+
+/** Build an appointment_id → summed add-on charge map from appointment_addons rows. */
+export function addonTotalsByAppointment(
+  rows: { appointment_id?: number | null; price?: number | null; quantity?: number | null }[] | null | undefined,
+): Map<number, number> {
+  const m = new Map<number, number>();
+  for (const r of rows ?? []) {
+    if (r.appointment_id == null) continue;
+    const total = (r.price ?? 0) * (r.quantity ?? 1);
+    m.set(r.appointment_id, (m.get(r.appointment_id) ?? 0) + total);
+  }
+  return m;
+}
+
 // ── Formatting helpers ─────────────────────────────────────────────────────
 
 export function lkr(amount: number): string {

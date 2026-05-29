@@ -45,6 +45,7 @@
 
 -- ── 0. CLEAN SLATE ─────────────────────────────────────────────────────────
 
+drop table if exists public.expenses           cascade;
 drop table if exists public.appointment_addons cascade;
 drop table if exists public.service_addons     cascade;
 drop table if exists public.service_variants   cascade;
@@ -360,6 +361,54 @@ create index appointment_addons_apt_idx
   on public.appointment_addons (appointment_id);
 
 
+-- ── 10. EXPENSES ─────────────────────────────────────────────────────────────
+--   Salon outgoings: supplies, rent, utilities, wages, equipment, etc. Marking
+--   a month's payroll as paid writes one row here with source='payroll' so it
+--   flows into the Income vs Expense report automatically.
+
+create table public.expenses (
+  id              bigserial      primary key,
+  salon_id        uuid           not null
+                                 default public.current_salon_id()
+                                 references public.salons(id) on delete cascade,
+  date            date           not null,
+  description     text           not null,
+  category        text           not null default 'Other'
+                                 check (category in (
+                                   'Supplies', 'Rent', 'Utilities', 'Staff Wages',
+                                   'Equipment', 'Marketing', 'Cleaning',
+                                   'Professional Services', 'Other'
+                                 )),
+  amount          numeric(10,2)  not null check (amount > 0),
+  payment_method  text           not null
+                                 check (payment_method in ('cash', 'card', 'transfer')),
+  bill_number     text,
+  vendor          text,
+  notes           text,
+  -- ── Payroll-completion bookkeeping ──
+  source          text           not null default 'manual'
+                                 check (source in ('manual', 'payroll')),
+  period_year     integer,
+  period_month    integer        check (period_month is null or (period_month between 1 and 12)),
+  created_at      timestamptz    not null default now()
+);
+
+alter table public.expenses enable row level security;
+
+create policy "expenses: salon all"
+  on public.expenses for all
+  using       (salon_id = public.current_salon_id())
+  with check  (salon_id = public.current_salon_id());
+
+create index expenses_salon_date
+  on public.expenses (salon_id, date desc);
+
+-- One payroll run per salon per month — prevents paying the same month twice
+create unique index expenses_payroll_period
+  on public.expenses (salon_id, period_year, period_month)
+  where source = 'payroll';
+
+
 -- ════════════════════════════════════════════════════════════════════════════
 --  SEED DATA
 -- ════════════════════════════════════════════════════════════════════════════
@@ -636,4 +685,5 @@ union all select 'service_addons',      count(*) from public.service_addons
 union all select 'customers',           count(*) from public.customers
 union all select 'appointments',        count(*) from public.appointments
 union all select 'appointment_addons',  count(*) from public.appointment_addons
+union all select 'expenses',            count(*) from public.expenses
 order by table_name;

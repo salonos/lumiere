@@ -6,7 +6,7 @@ import AppointmentRow from "@/components/AppointmentRow";
 import StatCard from "@/components/StatCard";
 import NewAppointmentButton from "@/components/NewAppointmentButton";
 import { createSupabaseServer } from "@/lib/supabase-server";
-import { lkr } from "@/lib/data";
+import { lkr, appointmentBase, addonTotalsByAppointment } from "@/lib/data";
 
 type Chip = { label: string; variant: "success" | "warning" | "plum" | "pink" };
 
@@ -196,40 +196,52 @@ export default async function DashboardPage() {
   const monthEndDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
   const monthEnd = `${monthEndDate.getFullYear()}-${String(monthEndDate.getMonth() + 1).padStart(2, "0")}-${String(monthEndDate.getDate()).padStart(2, "0")}`;
 
+  const revSelect = "id, quantity, variant_price, services(price)";
   const [{ data: wkRevData }, { data: lwkRevData }, { data: monthRevData }] = await Promise.all([
     supabase
       .from("appointments")
-      .select("services(price)")
+      .select(revSelect)
       .gte("date", wkStart)
       .lte("date", wkEnd)
       .eq("status", "completed"),
     supabase
       .from("appointments")
-      .select("services(price)")
+      .select(revSelect)
       .gte("date", lwkStart)
       .lte("date", lwkEnd)
       .eq("status", "completed"),
     supabase
       .from("appointments")
-      .select("services(price)")
+      .select(revSelect)
       .gte("date", monthStart)
       .lte("date", monthEnd)
       .eq("status", "completed"),
   ]);
 
-  const weekRevenue = (wkRevData ?? []).reduce(
-    (sum, a) => sum + ((a as { services?: { price?: number } }).services?.price ?? 0),
-    0,
-  );
-  const lastWeekRevenue = (lwkRevData ?? []).reduce(
-    (sum, a) => sum + ((a as { services?: { price?: number } }).services?.price ?? 0),
-    0,
-  );
-  const monthRevenue = (monthRevData ?? []).reduce(
-    (sum, a) => sum + ((a as { services?: { price?: number } }).services?.price ?? 0),
-    0,
-  );
-  const monthAppointments = (monthRevData ?? []).length;
+  // Add-on charges for every appointment in view (one query), then effective totals
+  type RevRow = { id?: number | null; quantity?: number | null; variant_price?: number | null; services?: { price?: number | null } | null };
+  const wkRows = (wkRevData ?? []) as RevRow[];
+  const lwkRows = (lwkRevData ?? []) as RevRow[];
+  const monthRows = (monthRevData ?? []) as RevRow[];
+  const allRevIds = [...wkRows, ...lwkRows, ...monthRows]
+    .map((r) => r.id)
+    .filter((id): id is number => id != null);
+
+  let addonMap = new Map<number, number>();
+  if (allRevIds.length > 0) {
+    const { data: addonRows } = await supabase
+      .from("appointment_addons")
+      .select("appointment_id, price, quantity")
+      .in("appointment_id", allRevIds);
+    addonMap = addonTotalsByAppointment(addonRows);
+  }
+
+  const effective = (a: RevRow) => appointmentBase(a) + (a.id != null ? addonMap.get(a.id) ?? 0 : 0);
+
+  const weekRevenue     = wkRows.reduce((sum, a) => sum + effective(a), 0);
+  const lastWeekRevenue = lwkRows.reduce((sum, a) => sum + effective(a), 0);
+  const monthRevenue    = monthRows.reduce((sum, a) => sum + effective(a), 0);
+  const monthAppointments = monthRows.length;
   const revenueDelta =
     lastWeekRevenue > 0
       ? Math.round(((weekRevenue - lastWeekRevenue) / lastWeekRevenue) * 100)

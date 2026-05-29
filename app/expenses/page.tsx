@@ -7,7 +7,7 @@ import MobileTabBar from "@/components/MobileTabBar";
 import Modal from "@/components/Modal";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import Toast, { type ToastTone } from "@/components/Toast";
-import { lkr, humanError } from "@/lib/data";
+import { lkr, humanError, appointmentBase, addonTotalsByAppointment } from "@/lib/data";
 import { supabase } from "@/lib/supabase";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -16,6 +16,15 @@ const MONTHS = [
   "January","February","March","April","May","June",
   "July","August","September","October","November","December",
 ];
+
+type RangeKey = "month" | "quarter" | "year" | "all";
+
+const RANGE_LABEL: Record<RangeKey, string> = {
+  month:   "Month",
+  quarter: "Last 3 months",
+  year:    "This year",
+  all:     "All time",
+};
 
 const EXPENSE_CATEGORIES = [
   "Supplies",
@@ -66,6 +75,9 @@ type Expense = {
   bill_number: string | null;
   vendor: string | null;
   notes: string | null;
+  source?: "manual" | "payroll" | null;
+  period_year?: number | null;
+  period_month?: number | null;
 };
 
 type IncomeBreakdown = {
@@ -144,7 +156,10 @@ function buildExpenseBreakdown(expenses: Expense[]): ExpenseBreakdown {
 export default function ExpensesPage() {
   const today = new Date();
 
-  // Current month in view
+  // Period range: month (with month nav) / quarter / year / all time
+  const [range, setRange] = useState<RangeKey>("month");
+
+  // Current month in view (only used when range === "month")
   const [MY, setMY] = useState<{ year: number; month: number }>({
     year:  today.getFullYear(),
     month: today.getMonth(), // 0-indexed
@@ -172,44 +187,89 @@ export default function ExpensesPage() {
   const showError   = (msg: string) => { setToastTone("error");   setToast(msg); };
   const showSuccess = (msg: string) => { setToastTone("success"); setToast(msg); };
 
-  // ── Month bounds ─────────────────────────────────────────────────────────────
+  // ── Period bounds ──────────────────────────────────────────────────────────
+  //  start/end are null for "all time" (no date filter). periodLabel is the
+  //  long label for card metas; periodNoun is the short label for stat headers.
 
-  const monthStart = `${MY.year}-${String(MY.month + 1).padStart(2, "0")}-01`;
-  const lastDay    = new Date(MY.year, MY.month + 1, 0).getDate();
-  const monthEnd   = `${MY.year}-${String(MY.month + 1).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  let rangeStart: string | null;
+  let rangeEnd:   string | null;
+  let periodLabel: string;
+  let periodNoun:  string;
+
+  if (range === "month") {
+    rangeStart = `${MY.year}-${pad(MY.month + 1)}-01`;
+    const lastDay = new Date(MY.year, MY.month + 1, 0).getDate();
+    rangeEnd   = `${MY.year}-${pad(MY.month + 1)}-${pad(lastDay)}`;
+    periodLabel = `${MONTHS[MY.month]} ${MY.year}`;
+    periodNoun  = MONTHS[MY.month];
+  } else if (range === "quarter") {
+    const y = today.getFullYear();
+    const m = today.getMonth();
+    const s = new Date(y, m - 2, 1);
+    rangeStart = `${s.getFullYear()}-${pad(s.getMonth() + 1)}-01`;
+    const lastDay = new Date(y, m + 1, 0).getDate();
+    rangeEnd   = `${y}-${pad(m + 1)}-${pad(lastDay)}`;
+    periodLabel = "Last 3 months";
+    periodNoun  = "last 3 months";
+  } else if (range === "year") {
+    const y = today.getFullYear();
+    rangeStart = `${y}-01-01`;
+    rangeEnd   = `${y}-12-31`;
+    periodLabel = String(y);
+    periodNoun  = String(y);
+  } else {
+    rangeStart = null;
+    rangeEnd   = null;
+    periodLabel = "All time";
+    periodNoun  = "all time";
+  }
 
   // ── Fetch data ────────────────────────────────────────────────────────────────
 
   const fetchData = useCallback(async () => {
     setLoading(true);
 
-    const [expRes, aptRes] = await Promise.all([
-      supabase
-        .from("expenses")
-        .select("*")
-        .gte("date", monthStart)
-        .lte("date", monthEnd)
-        .order("date",       { ascending: false })
-        .order("created_at", { ascending: false }),
+    // Apply the date window only when a bounded range is selected ("all" = no filter)
+    let expQuery = supabase
+      .from("expenses")
+      .select("*")
+      .order("date",       { ascending: false })
+      .order("created_at", { ascending: false });
+    let aptQuery = supabase
+      .from("appointments")
+      .select("id, quantity, variant_price, services(price), payment_method, discount_amount")
+      .eq("status", "completed");
 
-      supabase
-        .from("appointments")
-        .select("services(price), payment_method, discount_amount")
-        .eq("status", "completed")
-        .gte("date", monthStart)
-        .lte("date", monthEnd),
-    ]);
+    if (rangeStart && rangeEnd) {
+      expQuery = expQuery.gte("date", rangeStart).lte("date", rangeEnd);
+      aptQuery = aptQuery.gte("date", rangeStart).lte("date", rangeEnd);
+    }
+
+    const [expRes, aptRes] = await Promise.all([expQuery, aptQuery]);
 
     // Expenses
     if (expRes.error) showError(humanError(expRes.error, "Couldn't load expenses."));
     setExpenses((expRes.data ?? []) as Expense[]);
 
-    // Income breakdown from completed appointments
+    // Add-on charges for the completed appointments, so income matches what was paid
+    const apts = (aptRes.data ?? []) as Record<string, unknown>[];
+    const ids  = apts.map((a) => a.id as number).filter(Boolean);
+    let addonMap = new Map<number, number>();
+    if (ids.length > 0) {
+      const { data: addonRows } = await supabase
+        .from("appointment_addons")
+        .select("appointment_id, price, quantity")
+        .in("appointment_id", ids);
+      addonMap = addonTotalsByAppointment(addonRows);
+    }
+
+    // Income breakdown from completed appointments (effective price, net of discounts)
     const inc: IncomeBreakdown = { total: 0, cash: 0, card: 0, transfer: 0, unrecorded: 0 };
-    for (const row of (aptRes.data ?? []) as Record<string, unknown>[]) {
-      const servicePrice = (row.services as { price?: number } | null)?.price ?? 0;
-      const discount     = (row.discount_amount as number) ?? 0;
-      const net          = Math.max(0, servicePrice - discount);
+    for (const row of apts) {
+      const gross    = appointmentBase(row as Parameters<typeof appointmentBase>[0]) + (addonMap.get(row.id as number) ?? 0);
+      const discount = (row.discount_amount as number) ?? 0;
+      const net      = Math.max(0, gross - discount);
       inc.total += net;
       const method = ((row.payment_method as string | null) ?? "unrecorded") as keyof IncomeBreakdown;
       if (method in inc) inc[method] += net;
@@ -217,7 +277,7 @@ export default function ExpensesPage() {
     setIncome(inc);
     setLoading(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [monthStart, monthEnd]);
+  }, [rangeStart, rangeEnd]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -325,7 +385,6 @@ export default function ExpensesPage() {
     form.payment_method !== "" &&
     parseFloat(form.amount) > 0;
 
-  const monthLabel = `${MONTHS[MY.month]} ${MY.year}`;
   const hasData    = !loading && ((income?.total ?? 0) > 0 || expBreakdown.total > 0);
 
   // ── Render ────────────────────────────────────────────────────────────────────
@@ -347,34 +406,50 @@ export default function ExpensesPage() {
                 Compare against income to see your monthly net profit at a glance.
               </p>
             </div>
-            <div className="header-actions">
-              {/* Month navigator */}
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <button
-                  type="button"
-                  className="cal-nav-btn"
-                  onClick={prevMonth}
-                  aria-label="Previous month"
-                >
-                  <svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6" /></svg>
-                </button>
-                <span style={{
-                  minWidth: 140, textAlign: "center",
-                  fontSize: 13, fontWeight: 600,
-                  color: "var(--ink-800)", letterSpacing: "0.01em",
-                }}>
-                  {monthLabel}
-                </span>
-                <button
-                  type="button"
-                  className="cal-nav-btn"
-                  onClick={nextMonth}
-                  disabled={isFutureMonth}
-                  aria-label="Next month"
-                >
-                  <svg viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6" /></svg>
-                </button>
+            <div className="header-actions" style={{ flexWrap: "wrap", gap: 10 }}>
+              {/* Range selector */}
+              <div className="seg-toggle">
+                {(["month", "quarter", "year", "all"] as RangeKey[]).map((r) => (
+                  <button
+                    key={r}
+                    type="button"
+                    className={`seg-btn ${range === r ? "active" : ""}`}
+                    onClick={() => setRange(r)}
+                  >
+                    {RANGE_LABEL[r]}
+                  </button>
+                ))}
               </div>
+
+              {/* Month navigator — only in month mode */}
+              {range === "month" && (
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <button
+                    type="button"
+                    className="cal-nav-btn"
+                    onClick={prevMonth}
+                    aria-label="Previous month"
+                  >
+                    <svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6" /></svg>
+                  </button>
+                  <span style={{
+                    minWidth: 140, textAlign: "center",
+                    fontSize: 13, fontWeight: 600,
+                    color: "var(--ink-800)", letterSpacing: "0.01em",
+                  }}>
+                    {periodLabel}
+                  </span>
+                  <button
+                    type="button"
+                    className="cal-nav-btn"
+                    onClick={nextMonth}
+                    disabled={isFutureMonth}
+                    aria-label="Next month"
+                  >
+                    <svg viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6" /></svg>
+                  </button>
+                </div>
+              )}
               <button type="button" className="btn btn-primary" onClick={openAdd}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <line x1="12" y1="5" x2="12" y2="19" />
@@ -389,7 +464,7 @@ export default function ExpensesPage() {
         {/* ── Summary band ── */}
         <div className="stat-band">
           <div className="stat">
-            <div className="stat-label">Income · {MONTHS[MY.month]}</div>
+            <div className="stat-label">Income · {periodNoun}</div>
             <div className="stat-value">
               {loading ? "—" : (income?.total ?? 0) > 0 ? lkr(Math.round(income!.total)) : "—"}
             </div>
@@ -403,7 +478,7 @@ export default function ExpensesPage() {
           </div>
 
           <div className="stat">
-            <div className="stat-label">Expenses · {MONTHS[MY.month]}</div>
+            <div className="stat-label">Expenses · {periodNoun}</div>
             <div className="stat-value">
               {loading ? "—" : expBreakdown.total > 0 ? lkr(Math.round(expBreakdown.total)) : "—"}
             </div>
@@ -417,7 +492,7 @@ export default function ExpensesPage() {
           </div>
 
           <div className="stat">
-            <div className="stat-label">Net profit · {MONTHS[MY.month]}</div>
+            <div className="stat-label">Net profit · {periodNoun}</div>
             <div
               className="stat-value"
               style={{
@@ -449,7 +524,7 @@ export default function ExpensesPage() {
           <div className="rep-card" style={{ marginBottom: 24 }}>
             <div className="rep-card-head">
               <div className="rep-card-title">Income vs Expenses — by payment method</div>
-              <div className="rep-card-meta">{monthLabel} · net of discounts</div>
+              <div className="rep-card-meta">{periodLabel} · net of discounts</div>
             </div>
 
             <div style={{ overflowX: "auto" }}>
@@ -558,7 +633,7 @@ export default function ExpensesPage() {
           <div className="rep-card-head">
             <div className="rep-card-title">Expense records</div>
             <div className="rep-card-meta">
-              {monthLabel} · {expenses.length} record{expenses.length !== 1 ? "s" : ""}
+              {periodLabel} · {expenses.length} record{expenses.length !== 1 ? "s" : ""}
               {expBreakdown.total > 0 && ` · ${lkr(Math.round(expBreakdown.total))} total`}
             </div>
           </div>
@@ -571,7 +646,7 @@ export default function ExpensesPage() {
                 fontFamily: "var(--font-serif)", fontSize: 18,
                 color: "var(--ink-700)", marginBottom: 8,
               }}>
-                No expenses for {MONTHS[MY.month]}
+                No expenses for {periodLabel}
               </div>
               <div style={{ fontSize: 13, color: "var(--ink-400)", marginBottom: 20 }}>
                 Record your first outgoing — supplies, rent, utilities, and more.
@@ -607,8 +682,18 @@ export default function ExpensesPage() {
 
                       {/* Description + notes */}
                       <td style={tdStyle}>
-                        <div style={{ fontWeight: 500, color: "var(--ink-900)" }}>
+                        <div style={{ fontWeight: 500, color: "var(--ink-900)", display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
                           {e.description}
+                          {e.source === "payroll" && (
+                            <span style={{
+                              display: "inline-block",
+                              padding: "1px 7px", borderRadius: 5, fontSize: 10, fontWeight: 600,
+                              letterSpacing: "0.04em", textTransform: "uppercase",
+                              background: "var(--plum-100)", color: "var(--plum-800)",
+                            }}>
+                              Payroll
+                            </span>
+                          )}
                         </div>
                         {e.notes && (
                           <div style={{ fontSize: 11, color: "var(--ink-400)", marginTop: 2, lineHeight: 1.5 }}>

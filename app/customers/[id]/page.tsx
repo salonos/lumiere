@@ -7,6 +7,7 @@ import Sidebar from "@/components/Sidebar";
 import MobileTopBar from "@/components/MobileTopBar";
 import MobileTabBar from "@/components/MobileTabBar";
 import AppointmentFormModal from "@/components/AppointmentFormModal";
+import { appointmentBase, addonTotalsByAppointment } from "@/lib/data";
 import { supabase } from "@/lib/supabase";
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -79,6 +80,9 @@ type DbAppointment = {
   notes?: string;
   payment_method?: string | null;
   discount_amount?: number;
+  quantity?: number | null;
+  variant_price?: number | null;
+  variant_name?: string | null;
   services?: { name?: string; price?: number; duration?: number } | null;
   staff?: { name?: string } | null;
 };
@@ -92,6 +96,7 @@ export default function CustomerProfilePage() {
   const [loading, setLoading] = useState(true);
   const [customer, setCustomer] = useState<DbCustomer | null>(null);
   const [history, setHistory] = useState<DbAppointment[]>([]);
+  const [addonMap, setAddonMap] = useState<Map<number, number>>(new Map());
   const [notes, setNotes] = useState("");
   const [notesDirty, setNotesDirty] = useState(false);
   const [notesSaving, setNotesSaving] = useState(false);
@@ -125,7 +130,21 @@ export default function CustomerProfilePage() {
       .order("time", { ascending: false })
       .limit(10);
 
-    setHistory((hist ?? []) as DbAppointment[]);
+    const histRows = (hist ?? []) as DbAppointment[];
+    setHistory(histRows);
+
+    // Add-on charges for these visits, so per-visit totals match what was paid
+    const ids = histRows.map((h) => Number(h.id)).filter((n) => !Number.isNaN(n));
+    if (ids.length > 0) {
+      const { data: addonRows } = await supabase
+        .from("appointment_addons")
+        .select("appointment_id, price, quantity")
+        .in("appointment_id", ids);
+      setAddonMap(addonTotalsByAppointment(addonRows));
+    } else {
+      setAddonMap(new Map());
+    }
+
     setLoading(false);
   };
 
@@ -342,10 +361,12 @@ export default function CustomerProfilePage() {
                   history.map((item) => {
                     const dateStr = item.date ? formatLongDate(item.date) : "Unknown date";
                     const agoStr = item.date ? timeAgo(item.date) : "";
-                    const svcName = item.services?.name ?? "Service";
-                    const basePrice = item.services?.price ?? 0;
+                    const svcName = item.variant_name
+                      ? `${item.services?.name ?? "Service"} · ${item.variant_name}`
+                      : item.services?.name ?? "Service";
+                    const gross = appointmentBase(item) + (addonMap.get(Number(item.id)) ?? 0);
                     const discount = item.discount_amount ?? 0;
-                    const net = Math.max(0, basePrice - discount);
+                    const net = Math.max(0, gross - discount);
                     const staffName = item.staff?.name ?? null;
                     const PAYMENT_LABEL: Record<string, string> = {
                       cash: "Cash", card: "Card", transfer: "Bank transfer",
@@ -370,7 +391,7 @@ export default function CustomerProfilePage() {
                           <div className="history-note">{item.notes}</div>
                         ) : null}
                         <div className="history-meta">
-                          {basePrice > 0 && (
+                          {gross > 0 && (
                             <div className="history-price">
                               {formatLkr(net)}
                               {discount > 0 && (

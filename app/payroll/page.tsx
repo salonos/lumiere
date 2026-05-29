@@ -4,7 +4,10 @@ import { useCallback, useEffect, useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import MobileTopBar from "@/components/MobileTopBar";
 import MobileTabBar from "@/components/MobileTabBar";
-import { lkr, formatTime12 } from "@/lib/data";
+import { lkr, formatTime12, appointmentBase, addonTotalsByAppointment, humanError } from "@/lib/data";
+import Modal from "@/components/Modal";
+import ConfirmDialog from "@/components/ConfirmDialog";
+import Toast, { type ToastTone } from "@/components/Toast";
 import { supabase } from "@/lib/supabase";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -84,6 +87,19 @@ export default function PayrollPage() {
   const [ownerComm,  setOwnerComm]  = useState(0);
   const [payLoading, setPayLoading] = useState(false);
 
+  // ── Payroll completion (records the month's payroll as a Staff Wages expense) ──
+  const [paidExpense, setPaidExpense] = useState<{ id: number; date: string; amount: number; payment_method: string } | null>(null);
+  const [payOpen,   setPayOpen]   = useState(false);
+  const [payMethod, setPayMethod] = useState<"cash" | "card" | "transfer">("transfer");
+  const [paySaving, setPaySaving] = useState(false);
+  const [undoOpen,  setUndoOpen]  = useState(false);
+
+  // ── Toast ────────────────────────────────────────────────────────────────
+  const [toast,     setToast]     = useState<string | null>(null);
+  const [toastTone, setToastTone] = useState<ToastTone>("info");
+  const showError   = (msg: string) => { setToastTone("error");   setToast(msg); };
+  const showSuccess = (msg: string) => { setToastTone("success"); setToast(msg); };
+
   // ── Fetch reconciliation ───────────────────────────────────────────────────
 
   const fetchReco = useCallback(async (date: string) => {
@@ -95,11 +111,25 @@ export default function PayrollPage() {
       .eq("status", "completed")
       .order("time");
 
-    const rows = ((data ?? []) as Record<string, unknown>[]).map((r) => {
-      const price    = (r.services as { price?: number } | null)?.price ?? 0;
+    const apts = (data ?? []) as Record<string, unknown>[];
+
+    // Add-on charges for the day's appointments
+    const ids = apts.map((r) => r.id as number).filter(Boolean);
+    let addonMap = new Map<number, number>();
+    if (ids.length > 0) {
+      const { data: addonRows } = await supabase
+        .from("appointment_addons")
+        .select("appointment_id, price, quantity")
+        .in("appointment_id", ids);
+      addonMap = addonTotalsByAppointment(addonRows);
+    }
+
+    const rows = apts.map((r) => {
+      const id       = r.id as number;
+      const price    = appointmentBase(r as Parameters<typeof appointmentBase>[0]) + (addonMap.get(id) ?? 0);
       const discount = (r.discount_amount as number) ?? 0;
       return {
-        id:            r.id as number,
+        id,
         time:          ((r.time as string) ?? "").slice(0, 5),
         customerName:  (r.customers as { name?: string } | null)?.name ?? "Customer",
         serviceName:   (r.services as { name?: string } | null)?.name ?? "Service",
@@ -122,28 +152,49 @@ export default function PayrollPage() {
     setPayLoading(true);
     const { start, end } = monthRange(y, m);
 
-    const [staffRes, aptRes] = await Promise.all([
+    const [staffRes, aptRes, payRes] = await Promise.all([
       supabase.from("staff").select("id, name, role, salary").eq("active", true).order("name"),
       supabase
         .from("appointments")
-        .select("*, staff_id, staff(id, name), services(price, commission_rate)")
+        .select("id, staff_id, quantity, variant_price, staff(id, name), services(price, commission_rate)")
         .eq("status", "completed")
         .gte("date", start)
         .lte("date", end),
+      // Has this month's payroll already been recorded as an expense?
+      supabase
+        .from("expenses")
+        .select("id, date, amount, payment_method")
+        .eq("source", "payroll")
+        .eq("period_year", y)
+        .eq("period_month", m)
+        .maybeSingle(),
     ]);
+
+    setPaidExpense(payRes.error ? null : (payRes.data as typeof paidExpense) ?? null);
 
     const allStaff = (staffRes.data ?? []) as { id: number; name: string; role: string | null; salary: number | null }[];
     const apts     = ((aptRes.data  ?? []) as Record<string, unknown>[]);
+
+    // Add-on charges for the month (commission is paid on the full ticket value)
+    const ids = apts.map((a) => a.id as number).filter(Boolean);
+    let addonMap = new Map<number, number>();
+    if (ids.length > 0) {
+      const { data: addonRows } = await supabase
+        .from("appointment_addons")
+        .select("appointment_id, price, quantity")
+        .in("appointment_id", ids);
+      addonMap = addonTotalsByAppointment(addonRows);
+    }
 
     // Build commission map: staffId → { count, commission }
     const commMap = new Map<number, { count: number; commission: number }>();
     let ownerCount = 0, ownerCommTotal = 0;
 
     for (const a of apts) {
-      const sid     = (a.staff_id as number | null) ?? null;
-      const price   = (a.services as { price?: number; commission_rate?: number } | null)?.price ?? 0;
-      const rate    = (a.services as { price?: number; commission_rate?: number } | null)?.commission_rate ?? 0;
-      const earned  = price * rate / 100;
+      const sid      = (a.staff_id as number | null) ?? null;
+      const effective = appointmentBase(a as Parameters<typeof appointmentBase>[0]) + (addonMap.get(a.id as number) ?? 0);
+      const rate     = (a.services as { commission_rate?: number } | null)?.commission_rate ?? 0;
+      const earned   = effective * rate / 100;
 
       if (sid == null) {
         ownerCount++;
@@ -202,6 +253,44 @@ export default function PayrollPage() {
     if (m < 1)  { m = 12; y--; }
     setPayMonth(m);
     setPayYear(y);
+  };
+
+  // ── Record this month's payroll as a Staff Wages expense ───────────────────
+  const markPaid = async () => {
+    if (grandPayroll <= 0) return;
+    setPaySaving(true);
+    const { end } = monthRange(payYear, payMonth);
+    const { error } = await supabase.from("expenses").insert({
+      date:           end,
+      description:    `Payroll — ${monthLabel}`,
+      category:       "Staff Wages",
+      amount:         Math.round(grandPayroll),
+      payment_method: payMethod,
+      source:         "payroll",
+      period_year:    payYear,
+      period_month:   payMonth,
+      notes:          `${staffRows.length} staff · salaries ${lkr(Math.round(totalSalaries))} · commissions ${lkr(Math.round(totalCommissions))}`,
+    });
+    setPaySaving(false);
+    if (error) {
+      showError(humanError(error, "Couldn't record payroll — please try again."));
+      return;
+    }
+    setPayOpen(false);
+    showSuccess(`${monthLabel} payroll recorded as an expense.`);
+    fetchPayroll(payYear, payMonth);
+  };
+
+  const markUnpaid = async () => {
+    if (!paidExpense) { setUndoOpen(false); return; }
+    const { error } = await supabase.from("expenses").delete().eq("id", paidExpense.id);
+    setUndoOpen(false);
+    if (error) {
+      showError(humanError(error, "Couldn't undo — please try again."));
+      return;
+    }
+    showSuccess(`${monthLabel} payroll marked unpaid.`);
+    fetchPayroll(payYear, payMonth);
   };
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -438,6 +527,55 @@ export default function PayrollPage() {
                   </div>
                 </div>
 
+                {/* ── Payroll completion status ── */}
+                {grandPayroll > 0 && (
+                  <div
+                    className="pay-callout"
+                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}
+                  >
+                    {paidExpense ? (
+                      <>
+                        <span style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                          <span style={{
+                            display: "inline-flex", alignItems: "center", gap: 5,
+                            padding: "3px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600,
+                            background: "#D1FAE5", color: "#065F46",
+                          }}>
+                            ✓ Paid
+                          </span>
+                          <span style={{ color: "var(--ink-600)", fontSize: 13 }}>
+                            Recorded as a Staff Wages expense on {formatDateLong(paidExpense.date)} ·{" "}
+                            {PAYMENT_LABELS[paidExpense.payment_method] ?? paidExpense.payment_method}
+                          </span>
+                        </span>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ fontSize: 12, padding: "7px 16px" }}
+                          onClick={() => setUndoOpen(true)}
+                        >
+                          Mark as unpaid
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <span style={{ color: "var(--ink-600)", fontSize: 13 }}>
+                          This month&rsquo;s payroll hasn&rsquo;t been recorded yet. Marking it paid adds{" "}
+                          <strong>{lkr(Math.round(grandPayroll))}</strong> to your Income vs Expense report.
+                        </span>
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          style={{ fontSize: 12, padding: "7px 16px" }}
+                          onClick={() => { setPayMethod("transfer"); setPayOpen(true); }}
+                        >
+                          Mark payroll as paid
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+
                 {staffRows.length === 0 && ownerApts === 0 ? (
                   <div className="pay-empty">No completed appointments in {monthLabel}.</div>
                 ) : (
@@ -508,8 +646,10 @@ export default function PayrollPage() {
                 )}
 
                 <div style={{ marginTop: 16, fontSize: 12, color: "var(--ink-400)", lineHeight: 1.6 }}>
-                  Commissions are calculated from service price × commission rate for each completed appointment.
-                  Salary figures are monthly fixed amounts — prorate manually if staff joined or left mid-month.
+                  Commissions are calculated from the full ticket value (tier price × quantity, plus any
+                  add-ons) × commission rate for each completed appointment. Salary figures are monthly fixed
+                  amounts — prorate manually if staff joined or left mid-month. Marking payroll as paid records
+                  the total as a Staff Wages expense so it appears in your Income vs Expense report.
                 </div>
               </>
             )}
@@ -518,6 +658,93 @@ export default function PayrollPage() {
       </main>
 
       <MobileTabBar active="more" />
+
+      {/* ── Mark payroll as paid ── */}
+      <Modal
+        open={payOpen}
+        onClose={() => setPayOpen(false)}
+        eyebrow="Record payroll"
+        title={`Mark ${monthLabel} payroll as paid`}
+        subtitle="This records the total as a Staff Wages expense, dated to the end of the month, so it shows up in your Income vs Expense report."
+        footer={
+          <>
+            <button type="button" className="btn btn-ghost" onClick={() => setPayOpen(false)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={markPaid}
+              disabled={paySaving}
+            >
+              {paySaving ? "Recording…" : `Record ${lkr(Math.round(grandPayroll))}`}
+            </button>
+          </>
+        }
+      >
+        {/* Breakdown */}
+        <div style={{ background: "var(--cream)", borderRadius: 12, padding: "14px 16px", marginBottom: 18 }}>
+          {[
+            { label: "Salaries",    value: totalSalaries },
+            { label: "Commissions", value: totalCommissions },
+          ].map((r) => (
+            <div key={r.label} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--ink-600)", marginBottom: 8 }}>
+              <span>{r.label}</span>
+              <span>{lkr(Math.round(r.value))}</span>
+            </div>
+          ))}
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, fontWeight: 700, color: "var(--plum-900)", borderTop: "1px solid var(--ink-200)", paddingTop: 8 }}>
+            <span>Total payroll</span>
+            <span>{lkr(Math.round(grandPayroll))}</span>
+          </div>
+        </div>
+
+        {/* Payment method */}
+        <div className="field">
+          <label>Paid by</label>
+          <div style={{ display: "flex", gap: 8 }}>
+            {(["cash", "card", "transfer"] as const).map((pm) => {
+              const selected = payMethod === pm;
+              return (
+                <button
+                  key={pm}
+                  type="button"
+                  onClick={() => setPayMethod(pm)}
+                  style={{
+                    flex: 1, padding: "11px 6px", borderRadius: 10,
+                    border: `1.5px solid ${selected ? "var(--plum-500)" : "var(--ink-200)"}`,
+                    background: selected ? "var(--plum-50)" : "var(--white)",
+                    color: selected ? "var(--plum-800)" : "var(--ink-700)",
+                    fontSize: 13, fontWeight: selected ? 600 : 500,
+                    cursor: "pointer", fontFamily: "inherit", transition: "all 0.12s",
+                    boxShadow: selected ? "0 0 0 3px rgba(165,38,104,0.08)" : "none",
+                  }}
+                >
+                  {PAYMENT_LABELS[pm]}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </Modal>
+
+      {/* ── Undo payroll payment ── */}
+      <ConfirmDialog
+        open={undoOpen}
+        onClose={() => setUndoOpen(false)}
+        onConfirm={markUnpaid}
+        eyebrow="Undo payroll"
+        title={`Mark ${monthLabel} payroll as unpaid?`}
+        body={
+          paidExpense
+            ? `This removes the ${lkr(Math.round(paidExpense.amount))} Staff Wages expense from your Income vs Expense report. You can record it again at any time.`
+            : undefined
+        }
+        confirmLabel="Mark unpaid"
+        cancelLabel="Keep"
+      />
+
+      <Toast message={toast} tone={toastTone} onDone={() => setToast(null)} />
     </div>
   );
 }

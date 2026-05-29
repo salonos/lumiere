@@ -23,8 +23,8 @@ It's a single working surface for a small salon owner to run their day:
 - Track customer history, notes, visit counts, total spend, tags (VIP / Regular / Sensitive / New)
 - Manage services (with optional tiered prices, modifier add-ons, per-finger pricing, patch-test flag)
 - Manage staff + station types (e.g. "Wax Room × 1") and which services each station can host
-- Log expenses (cash / card / transfer + bill number + vendor) and see income vs. expense for any month
-- Run a payroll report by month showing each staff member's commission owed
+- Log expenses (cash / card / transfer + bill number + vendor) and see income vs. expense for any period — this month, last 3 months, this year, or all time
+- Run a payroll report by month showing each staff member's commission owed, and **mark a month's payroll paid** to post it straight into the income/expense report as a Staff Wages expense
 - See revenue / cancellation / top-service / top-customer reports (filter by month / quarter / year)
 - A public **/book/[slug]** page customers can hit without logging in to start a booking (WhatsApp hand-off)
 
@@ -45,7 +45,7 @@ TypeScript 5.6          strict; project compiles with `npx tsc --noEmit --skipLi
 ```
 
 There are exactly four files in `lib/`:
-- `lib/data.ts` — pure types and formatters (`ServiceCategory`, `lkr()`, `formatTime12()`, …)
+- `lib/data.ts` — pure types and formatters (`ServiceCategory`, `lkr()`, `formatTime12()`, `humanError()`) plus the shared revenue helpers `appointmentBase()` and `addonTotalsByAppointment()`
 - `lib/supabase.ts` — browser singleton (`createBrowserClient` from `@supabase/ssr`)
 - `lib/supabase-server.ts` — server-component client that reads Next.js cookies
 - `lib/supabase-admin.ts` — service-role client for server-only privileged writes (only used by `/api/signup`)
@@ -88,7 +88,11 @@ appointments           Per-salon booking. customer_id + service_id + staff_id (n
 appointment_addons     Which service_addons were applied to a given appointment. Snapshots
                        name + price + quantity + unit_label so history survives edits.
 expenses               Per-salon expense log. date, description, category (CHECK list),
-                       amount, payment_method (cash|card|transfer), bill_number, vendor, notes
+                       amount, payment_method (cash|card|transfer), bill_number, vendor, notes.
+                       Plus payroll-completion bookkeeping: source ('manual'|'payroll'),
+                       period_year, period_month. A partial unique index on
+                       (salon_id, period_year, period_month) WHERE source='payroll' stops
+                       the same month's payroll being recorded twice.
 ```
 
 ### Multi-tenancy & RLS
@@ -132,8 +136,10 @@ pastel93_services.sql     Seeds Pastel 93's full catalogue from the PDF price li
                           ~52 services, 52 wax variants, 30+ add-ons. Refuses to run if
                           appointments already exist (to avoid breaking history).
 
-expenses.sql              Standalone migration that adds the `expenses` table. Now also baked
-                          into reset.sql but kept here for in-place upgrades of older installs.
+expenses.sql              Standalone migration that adds/upgrades the `expenses` table. Now also
+                          baked into reset.sql but kept here for in-place upgrades — it both
+                          CREATEs the table fresh and ALTERs older installs to add the payroll
+                          columns (source / period_year / period_month) + the partial unique index.
 
 opening_hours.sql         Standalone migration that adds the `opening_hours jsonb` column on
                           salons. Also baked into reset.sql.
@@ -224,8 +230,22 @@ effective_price  = base_line + addons_total
 net_received     = max(0, effective_price - discount_amount)
 ```
 
-This logic is implemented in `app/calendar/page.tsx` (when building each `CalApt` row) and
-mirrored in `components/AppointmentDetailModal.tsx` (for the breakdown panel).
+Two shared helpers in `lib/data.ts` keep this consistent across **every** money surface:
+
+```ts
+appointmentBase(row)                 // (variant_price ?? services.price) × quantity
+addonTotalsByAppointment(addonRows)  // Map<appointment_id, Σ price × qty> for a batch
+```
+
+The pattern everywhere is: fetch the appointments, fetch their `appointment_addons` in one
+`.in("appointment_id", ids)` query, build the add-on map, then
+`effective = appointmentBase(row) + addonMap.get(row.id)`. This is now used in
+`app/calendar/page.tsx`, `components/AppointmentDetailModal.tsx`, `app/reports/page.tsx`
+(revenue, top services/customers, trend, commissions, payment breakdown),
+`app/payroll/page.tsx` (reconciliation + commissions), `app/expenses/page.tsx` (income),
+`app/dashboard/page.tsx` (week/month revenue), and `app/customers/[id]/page.tsx` (visit
+history). Before this, those surfaces read raw `services.price` and silently under-counted
+any booking with a tier, a quantity, or an add-on.
 
 ---
 
@@ -243,8 +263,8 @@ mirrored in `components/AppointmentDetailModal.tsx` (for the breakdown panel).
 | `/services` | Full CRUD via the rich `ServiceFormModal`. Cards show TIERED / EXTRAS / PATCH TEST chips at a glance. Toggle Live / Hidden | Supabase, with multi-table sync (services + service_variants + service_addons) |
 | `/staff` | Staff CRUD + station-type CRUD on the same page. Before deactivating or deleting a staff member with upcoming appointments, opens `StaffReassignModal` to choose a replacement | Supabase |
 | `/reports` | Revenue (with delta), appointments completed/cancelled, new customers, revenue trend chart (4 weekly bars for month / 3 monthly for quarter / 12 monthly for year — matches the range selector), top services, top customers, payment-method breakdown, staff commissions, cancellation summary | Supabase |
-| `/expenses` | Monthly expense CRUD + Income vs Expense breakdown table (Cash / Card / Transfer / Unrecorded income from completed appointments). Net profit line goes green or red | Supabase |
-| `/payroll` | Day or month view of all completed appointments with staff attribution. Aggregate per-staff totals: gross + commission earned + net to pay | Supabase |
+| `/expenses` | Expense CRUD + Income vs Expense breakdown table (Cash / Card / Transfer / Unrecorded income from completed appointments). Range selector: **Month** (with month nav) / **Last 3 months** / **This year** / **All time**. Net profit line goes green or red. Payroll-sourced expenses show a "Payroll" badge | Supabase |
+| `/payroll` | Daily reconciliation + monthly staff payroll. Monthly view aggregates per-staff totals (salary + commission earned on the full effective ticket) and has a **Mark payroll as paid** action — pick a payment method, and it writes a single Staff Wages expense (source='payroll', dated to month end) that flows into the income/expense report. A "Paid ✓" banner with **Mark as unpaid** (deletes that expense) shows once recorded | Supabase |
 | `/reminders` | Static template preview with "coming soon" banner — toggles live in /settings. **Not wired to any sending pipeline yet.** | — |
 | `/settings` | Edits salon profile + opening hours (jsonb on salons.opening_hours). Reminder toggles are local-only. Account section is read-only and shows auth email | Supabase |
 | `/book/[slug]` | Public route (auth-bypassed via middleware + public RLS policies on `salons` by `booking_slug` and `services` where `enabled=true`). Lists services, hands off to WhatsApp | Supabase (public policies) |
@@ -356,9 +376,16 @@ SUPABASE_SERVICE_ROLE_KEY=<service-role-key>     # only for /api/signup
 - Staff CRUD + station-type CRUD + reassign-before-deactivate flow
 - Drag-and-drop calendar (FullCalendar week/month + custom staff-column day view)
 - Expense logging with category + bill number + vendor + payment method
-- Income vs Expense report (computes income from completed appointments by payment method)
+- Income vs Expense report (income from completed appointments by payment method) with a
+  range selector — month / last 3 months / this year / all time
+- **Payroll completion** — marking a month paid records the total as a Staff Wages expense
+  (source='payroll'), so it appears in the income/expense report; a partial unique index
+  prevents double-recording, and "Mark as unpaid" deletes the expense to undo
+- **Effective-price consistency fix** — dashboard, reports, payroll and expenses all now
+  use `appointmentBase()` + add-on totals instead of raw `services.price`, so tiers,
+  quantities and add-ons are counted in every revenue/commission/income figure
 - Reports with range selector (month / quarter / year) and matching revenue trend chart
-- Payroll report (day or month view, per-staff commissions)
+- Payroll report (day reconciliation + month per-staff commissions)
 - Opening hours persisted in `salons.opening_hours jsonb`, respected by FullCalendar
   business-hours overlay
 - Public booking page reads the salon by slug, lists live services, hands off to WhatsApp
@@ -410,9 +437,11 @@ SUPABASE_SERVICE_ROLE_KEY=<service-role-key>     # only for /api/signup
   copied from the master tables. If the owner later edits the variant or deletes an
   add-on, past receipts stay intact.
 - **Effective price, not service.price.** Anywhere money matters — customer `total_spend`
-  on completion, the "Amount received" line in the detail modal, the reports — use
-  `(variant_price ?? servicePrice) × quantity + sum(addons)`. The raw `service.price` is
-  just the base / fallback.
+  on completion, the "Amount received" line in the detail modal, dashboard/reports/payroll/
+  expenses totals, customer visit history — use `(variant_price ?? servicePrice) × quantity
+  + sum(addons)`. Use the shared `appointmentBase()` + `addonTotalsByAppointment()` helpers
+  from `lib/data.ts` rather than re-deriving it; the raw `service.price` is just the base /
+  fallback and reading it alone will under-count any tiered / per-unit / add-on booking.
 - **Customer IDs are slugs.** `dilini-perera`, not a UUID. Generated client-side from the
   name, with a `-NNNN` suffix on collision. Renaming a customer does not change the URL.
 - **One server component:** the dashboard. Everything else is `"use client"`. The
