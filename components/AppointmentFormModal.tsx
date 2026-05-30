@@ -108,6 +108,16 @@ function newKey(): string {
   return `svc-${Date.now()}-${_keySeq++}`;
 }
 
+/** Slug-style customer id from a name (customers.id is a client-generated text PK,
+ *  there is no DB default). Mirrors components/CustomerFormModal.tsx. */
+function toSlug(name: string): string {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
 function blankService(): ServiceLine {
   return {
     key:           newKey(),
@@ -672,18 +682,29 @@ export default function AppointmentFormModal({
     let customerId = draft.customer_id;
 
     if (isNewCustomer) {
-      const { data: newCust, error: custErr } = await supabase
-        .from("customers")
-        .insert({ name: newName.trim(), phone: newPhone.trim() || null })
-        .select("id")
-        .single();
+      // customers.id is a client-generated slug PK (no DB default) — build it from the name
+      const base = toSlug(newName.trim()) || `customer-${Date.now().toString().slice(-6)}`;
+      let newId = base;
+      const custPayload = { name: newName.trim(), phone: newPhone.trim() || null };
 
-      if (custErr || !newCust) {
+      let { error: custErr } = await supabase
+        .from("customers")
+        .insert({ id: newId, ...custPayload });
+
+      // Slug collision (another customer already has this name) — retry with a short suffix
+      if (custErr?.code === "23505") {
+        newId = `${base}-${Date.now().toString().slice(-4)}`;
+        ({ error: custErr } = await supabase
+          .from("customers")
+          .insert({ id: newId, ...custPayload }));
+      }
+
+      if (custErr) {
         setError(humanError(custErr, "We couldn't add that customer. Try again in a moment."));
         setSaving(false);
         return;
       }
-      customerId = (newCust as { id: string }).id;
+      customerId = newId;
     }
 
     // Build appointment rows + remember each line's selected add-ons keyed by row.time
@@ -1184,21 +1205,27 @@ export default function AppointmentFormModal({
                                 key={a.addon_id}
                                 style={{
                                   display: "flex", alignItems: "center", gap: 10,
-                                  padding: "6px 10px",
+                                  padding: "8px 10px",
                                   borderRadius: 6,
                                   cursor: "pointer",
                                   background: a.selected ? "var(--plum-50)" : "transparent",
+                                  // Override global `.modal-body label` (uppercase + wide letter-spacing)
+                                  textTransform: "none",
+                                  letterSpacing: "normal",
+                                  fontWeight: 400,
+                                  marginBottom: 0,
                                 }}
                               >
                                 <input
                                   type="checkbox"
                                   checked={a.selected}
                                   onChange={(e) => updateAddonSelected(line.key, a.addon_id, e.target.checked)}
-                                  style={{ accentColor: "var(--plum-600)" }}
+                                  // Override global `.modal-body input { width: 100% }` so the box doesn't eat the row
+                                  style={{ width: 16, height: 16, flexShrink: 0, margin: 0, accentColor: "var(--plum-600)" }}
                                 />
-                                <span style={{ flex: 1, fontSize: 12, color: "var(--ink-900)" }}>
+                                <span style={{ flex: 1, fontSize: 13, color: "var(--ink-900)", lineHeight: 1.4 }}>
                                   {a.name}
-                                  <span style={{ color: "var(--ink-400)", fontWeight: 400 }}>
+                                  <span style={{ color: "var(--ink-400)" }}>
                                     {"  ·  LKR "}{a.price.toLocaleString()}
                                     {a.unit_label ? ` ${a.unit_label}` : ""}
                                   </span>
@@ -1211,7 +1238,7 @@ export default function AppointmentFormModal({
                                     value={a.quantity}
                                     onClick={(e) => e.stopPropagation()}
                                     onChange={(e) => updateAddonQuantity(line.key, a.addon_id, Number(e.target.value))}
-                                    style={{ width: 60, padding: "4px 8px", fontSize: 12, textAlign: "center" }}
+                                    style={{ width: 56, flexShrink: 0, padding: "4px 8px", fontSize: 12, textAlign: "center" }}
                                   />
                                 )}
                               </label>

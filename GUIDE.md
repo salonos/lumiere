@@ -442,14 +442,32 @@ SUPABASE_SERVICE_ROLE_KEY=<service-role-key>     # only for /api/signup
   + sum(addons)`. Use the shared `appointmentBase()` + `addonTotalsByAppointment()` helpers
   from `lib/data.ts` rather than re-deriving it; the raw `service.price` is just the base /
   fallback and reading it alone will under-count any tiered / per-unit / add-on booking.
-- **Customer IDs are slugs.** `dilini-perera`, not a UUID. Generated client-side from the
-  name, with a `-NNNN` suffix on collision. Renaming a customer does not change the URL.
+- **Customer IDs are slugs — and there is NO DB default for them.** `dilini-perera`, not a
+  UUID. `customers.id` is a `text` primary key the app must fill in itself: every code path
+  that inserts a customer has to generate the slug from the name with `toSlug()` and include
+  `id` in the insert, retrying with a `-NNNN` suffix on a `23505` collision. Two paths create
+  customers today — `components/CustomerFormModal.tsx` and the inline "New customer" flow in
+  `components/AppointmentFormModal.tsx` (`submit()`); both follow this pattern. If you ever
+  insert a customer without `id`, Postgres raises a NOT-NULL violation (`23502`) which
+  `humanError()` surfaces as the misleading *"A required field is empty"* — so that message on
+  a new-customer booking almost always means a missing slug, not a missing form field.
+  Renaming a customer does not change the URL.
 - **One server component:** the dashboard. Everything else is `"use client"`. The
   dashboard uses `createSupabaseServer()` and reads cookies for SSR; the rest use the
   browser singleton. Both share the same session because of `@supabase/ssr`'s cookie API.
 - **Inline styles are fine.** Most pages use inline `style={{}}` objects instead of
   Tailwind utility classes. The codebase mixes both. Don't refactor working inline styles
   to Tailwind for its own sake.
+- **Modal form CSS is global and aggressive — watch the cascade.** `app/globals.css` styles
+  *every* element inside `.modal-body`: `label` gets `text-transform: uppercase` + wide
+  `letter-spacing` + `display: block`, and `input/select/textarea` get `width: 100%`. That's
+  what you want for normal form fields, but if you use a `<label>` as a clickable row wrapper
+  (e.g. the add-on checkboxes in `AppointmentFormModal.tsx`) or a bare `<input type="checkbox">`,
+  they inherit those rules — the text comes out UPPER-CASED and letter-spaced and the checkbox
+  stretches to full width, crushing the text into a one-word-per-line column. Fix is to
+  override inline: on the label `textTransform: "none", letterSpacing: "normal"`; on the
+  checkbox `width: 16, height: 16, flexShrink: 0`. Prefer a non-`label` wrapper for custom rows
+  when you don't need the implicit click-to-toggle.
 - **Postgres column casing matters when reading joins.** Supabase types nested joins as
   arrays even when the relationship is one-to-one — always normalise with
   `Array.isArray(x.salons) ? x.salons[0] : x.salons`. The Sidebar and Settings page both
